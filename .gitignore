@@ -1,0 +1,10 @@
+.gradle/
+local.properties
+**/build/
+app/src/main/assets/web/
+*.jks
+*.keystore
+/apk/
+/updates/
+/scripts/
+.DS_Store

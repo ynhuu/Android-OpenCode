@@ -1,0 +1,45 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+android {
+    namespace 'cn.olonet.opencode'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'cn.olonet.opencode'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+    }
+    buildFeatures { buildConfig true }
+    sourceSets { main { assets.srcDirs = [] } }
+    androidResources { ignoreAssetsPattern '!.svn:!.git:!CVS:!*.scc:!.*:!*~' }
+    signingConfigs {
+        distribution {
+            if (System.getenv('OPENCODE_KEYSTORE')) {
+                storeFile file(System.getenv('OPENCODE_KEYSTORE'))
+                storePassword System.getenv('OPENCODE_STORE_PASSWORD')
+                keyAlias System.getenv('OPENCODE_KEY_ALIAS')
+                keyPassword System.getenv('OPENCODE_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            signingConfig System.getenv('OPENCODE_KEYSTORE') ? signingConfigs.distribution : signingConfigs.debug
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+}
+dependencies {
+    implementation 'androidx.webkit:webkit:1.12.1'
+    testImplementation 'junit:junit:4.13.2'
+}

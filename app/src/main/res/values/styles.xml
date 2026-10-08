@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="shell_background">#fafafa</color>
+    <color name="shell_text">#171717</color>
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">@color/shell_background</item>
+        <item name="android:statusBarColor">@color/shell_background</item>
+        <item name="android:navigationBarColor">#171717</item>
+        <item name="android:colorAccent">#777777</item>
+    </style>
+</resources>

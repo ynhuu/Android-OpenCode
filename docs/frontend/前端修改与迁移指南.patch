@@ -1,0 +1,1347 @@
+--- a/package.json
++++ b/package.json
+@@ -174,6 +174,7 @@
+     "@silvia-odwyer/photon-node@0.3.4": "patches/@silvia-odwyer%2Fphoton-node@0.3.4.patch",
+     "@standard-community/standard-openapi@0.2.9": "patches/@standard-community%2Fstandard-openapi@0.2.9.patch",
+     "solid-js@1.9.15": "patches/solid-js@1.9.15.patch",
++    "solid-prevent-scroll@0.1.11": "patches/solid-prevent-scroll@0.1.11.patch",
+     "@ai-sdk/mistral@3.0.51": "patches/@ai-sdk%2Fmistral@3.0.51.patch",
+     "gcp-metadata@8.1.2": "patches/gcp-metadata@8.1.2.patch",
+     "pacote@21.5.1": "patches/pacote@21.5.1.patch",
+--- a/bun.lock
++++ b/bun.lock
+@@ -1128,6 +1128,7 @@
+     "solid-js@1.9.15": "patches/solid-js@1.9.15.patch",
+     "vite@8.2.2": "patches/vite@8.2.2.patch",
+     "@ff-labs/fff-bun@0.10.5": "patches/@ff-labs%2Ffff-bun@0.10.5.patch",
++    "solid-prevent-scroll@0.1.11": "patches/solid-prevent-scroll@0.1.11.patch",
+     "@dnd-kit/dom@0.5.0": "patches/@dnd-kit%2Fdom@0.5.0.patch",
+     "@ai-sdk/openai-compatible@2.0.41": "patches/@ai-sdk%2Fopenai-compatible@2.0.41.patch",
+   },
+--- /dev/null
++++ b/patches/solid-prevent-scroll@0.1.11.patch
+@@ -0,0 +1,82 @@
++diff --git a/dist/index.js b/dist/index.js
++index 87c1d70ce6b6cfa1dc24752a7b642a463c3bb976..6069e381892d46912d1a08a9d8562efda5ead473 100644
++--- a/dist/index.js
+++++ b/dist/index.js
++@@ -98,14 +98,15 @@ var createPreventScroll = (props) => {
++     currentTouchStartDelta = null;
++   };
++   const maybePreventWheel = (event) => {
++-    const target = event.target;
+++    const path = event.composedPath();
+++    const target = path.find((node) => node instanceof HTMLElement) ?? event.target;
++     const wrapper = access(defaultedProps.element);
++     const delta = getDeltaXY(event);
++     const axis = Math.abs(delta[0]) > Math.abs(delta[1]) ? "x" : "y";
++     const axisDelta = axis === "x" ? delta[0] : delta[1];
++     const resultsInScroll = wouldScroll(target, axis, axisDelta, wrapper);
++     let shouldCancel;
++-    if (wrapper && contains(wrapper, target)) {
+++    if (wrapper && path.includes(wrapper)) {
++       shouldCancel = !resultsInScroll;
++     } else {
++       shouldCancel = true;
++@@ -116,7 +117,8 @@ var createPreventScroll = (props) => {
++   };
++   const maybePreventTouch = (event) => {
++     const wrapper = access(defaultedProps.element);
++-    const target = event.target;
+++    const path = event.composedPath();
+++    const target = path.find((node) => node instanceof HTMLElement) ?? event.target;
++     let shouldCancel;
++     if (event.touches.length === 2) {
++       shouldCancel = !access(defaultedProps.allowPinchZoom);
++@@ -138,7 +140,7 @@ var createPreventScroll = (props) => {
++           currentTouchStartDelta,
++           wrapper
++         );
++-        if (wrapper && contains(wrapper, target)) {
+++        if (wrapper && path.includes(wrapper)) {
++           shouldCancel = !wouldResultInScroll;
++         } else {
++           shouldCancel = true;
++diff --git a/dist/index.jsx b/dist/index.jsx
++index 150f2f1a7250f7648aa141cd3dda062ae6d6e419..267fb7c7b326a35f763387f3be2d2d9293c1acc6 100644
++--- a/dist/index.jsx
+++++ b/dist/index.jsx
++@@ -103,14 +103,15 @@ var createPreventScroll = (props) => {
++     currentTouchStartDelta = null;
++   };
++   const maybePreventWheel = (event) => {
++-    const target = event.target;
+++    const path = event.composedPath();
+++    const target = path.find((node) => node instanceof HTMLElement) ?? event.target;
++     const wrapper = access(defaultedProps.element);
++     const delta = getDeltaXY(event);
++     const axis = Math.abs(delta[0]) > Math.abs(delta[1]) ? "x" : "y";
++     const axisDelta = axis === "x" ? delta[0] : delta[1];
++     const resultsInScroll = wouldScroll(target, axis, axisDelta, wrapper);
++     let shouldCancel;
++-    if (wrapper && contains(wrapper, target)) {
+++    if (wrapper && path.includes(wrapper)) {
++       shouldCancel = !resultsInScroll;
++     } else {
++       shouldCancel = true;
++@@ -121,7 +122,8 @@ var createPreventScroll = (props) => {
++   };
++   const maybePreventTouch = (event) => {
++     const wrapper = access(defaultedProps.element);
++-    const target = event.target;
+++    const path = event.composedPath();
+++    const target = path.find((node) => node instanceof HTMLElement) ?? event.target;
++     let shouldCancel;
++     if (event.touches.length === 2) {
++       shouldCancel = !access(defaultedProps.allowPinchZoom);
++@@ -143,7 +145,7 @@ var createPreventScroll = (props) => {
++           currentTouchStartDelta,
++           wrapper
++         );
++-        if (wrapper && contains(wrapper, target)) {
+++        if (wrapper && path.includes(wrapper)) {
++           shouldCancel = !wouldResultInScroll;
++         } else {
++           shouldCancel = true;
+--- /dev/null
++++ b/packages/app/.env.production
+@@ -0,0 +1 @@
++VITE_OPENCODE_SERVER_MODE=none
+--- a/packages/app/src/workspaces/selection/dialog.tsx
++++ b/packages/app/src/workspaces/selection/dialog.tsx
+@@ -293,6 +293,13 @@
+         button[data-type="item"]:hover {
+           background: var(--v2-overlay-simple-overlay-hover) !important;
+         }
++        @media (hover: none) {
++          button[data-type="item"]:hover:not([data-item-selected="true"]),
++          button[data-type="item"][data-item-context-hover="true"]:not([data-item-selected="true"]) {
++            background: transparent !important;
++            --truncate-marker-background-overlay-color: transparent !important;
++          }
++        }
+         button[data-type="item"]:focus-visible {
+           outline: none !important;
+           box-shadow: none !important;
+@@ -300,6 +307,8 @@
+         [data-file-tree-virtualized-scroll] {
+           overscroll-behavior: contain;
+           scrollbar-width: thin;
++          touch-action: pan-y;
++          -webkit-overflow-scrolling: touch;
+         }
+       `,
+       onExpansionChange(change) {
+--- a/packages/app/src/home/sessions/view.tsx
++++ b/packages/app/src/home/sessions/view.tsx
+@@ -511,6 +511,8 @@
+   let longPressStart: { x: number; y: number } | undefined
+   let suppressClick = false
+   let menuInteractedOutside = false
++  let touch: { element: HTMLElement; opened: boolean } | undefined
++  let releaseTimer: ReturnType<typeof setTimeout> | undefined
+ 
+   // Focus targets are looked up by session ID: session store updates recreate
+   // row components, so instance refs can point at detached nodes by the time
+@@ -529,7 +531,66 @@
+     longPressStart = undefined
+   }
+ 
+-  onCleanup(clearLongPress)
++  const finishTouch = () => {
++    clearLongPress()
++    clearTimeout(releaseTimer)
++    releaseTimer = undefined
++    touch = undefined
++    suppressClick = false
++    document.removeEventListener("pointerdown", nextInteraction, true)
++    document.removeEventListener("keydown", finishTouch, true)
++    document.removeEventListener("touchend", releaseTouch, true)
++    document.removeEventListener("touchcancel", releaseTouch, true)
++    document.removeEventListener("click", compatibilityClick, true)
++  }
++
++  const nextInteraction = (event: PointerEvent) => {
++    // Only mouse events retargeted to the original row can be compatibility
++    // events. A new touch, pen, or mouse outside is a genuine interaction.
++    if (
++      touch?.opened &&
++      event.pointerType === "mouse" &&
++      event.target instanceof Node &&
++      touch.element.contains(event.target)
++    ) {
++      event.preventDefault()
++      event.stopImmediatePropagation()
++      return
++    }
++    finishTouch()
++  }
++
++  const settleTouch = () => {
++    clearLongPress()
++    if (!touch) {
++      finishTouch()
++      return
++    }
++    // WebKit's compatibility click/focus can follow touchend asynchronously.
++    // Keep a cancelled touch briefly too: native contextmenu can arrive next.
++    // Bound the protection even if no subsequent user gesture arrives.
++    clearTimeout(releaseTimer)
++    releaseTimer = setTimeout(finishTouch, 750)
++  }
++
++  const releaseTouch = (event: TouchEvent) => {
++    if (touch?.opened && event.cancelable) event.preventDefault()
++    if (event.touches.length === 0) settleTouch()
++  }
++
++  const compatibilityClick = (event: MouseEvent) => {
++    if (
++      !touch?.opened ||
++      event.detail === 0 ||
++      !(event.target instanceof Node) ||
++      !touch.element.contains(event.target)
++    )
++      return
++    event.preventDefault()
++    event.stopImmediatePropagation()
++  }
++
++  onCleanup(finishTouch)
+ 
+   const openMenu = (element: HTMLElement, clientX: number, clientY: number) => {
+     const bounds = element.getBoundingClientRect()
+@@ -537,12 +598,23 @@
+   }
+ 
+   const openEditor = () => {
++    // Select on click, not pointerup: the release click must finish before the
++    // new input exists. Finish Solid's event batch before focusing the mounted
++    // input, without waiting for another animation frame.
++    menuInteractedOutside = true
++    props.setRowUI("menu", (value) => (value?.id === sessionID() ? undefined : value))
+     props.setRowUI("editor", { id: sessionID(), draft: title(), renaming: false })
+-    requestAnimationFrame(() => {
++    queueMicrotask(() => {
+       const input = renameInput()
+       input?.focus()
+       input?.select()
+     })
++  }
++
++  const deleteSession = () => {
++    menuInteractedOutside = true
++    props.setRowUI("menu", (value) => (value?.id === sessionID() ? undefined : value))
++    props.onDeleteSession(props.server, props.record.session)
+   }
+ 
+   const closeEditor = () => {
+@@ -587,6 +659,9 @@
+         // While renaming, keep the native menu so paste and spelling work.
+         if (editor()) return
+         event.preventDefault()
++        suppressClick = true
++        if (touch) touch.opened = true
++        clearLongPress()
+         openMenu(event.currentTarget, event.clientX, event.clientY)
+       }}
+     >
+@@ -651,6 +726,7 @@
+           data-component="home-session-row"
+           aria-haspopup="menu"
+           aria-expanded={!!menu()}
++          style={{ "-webkit-touch-callout": "none", "user-select": "none" }}
+           class={`
+             flex h-10 min-w-0 w-full flex-1 shrink-0 cursor-default items-center rounded-[6px] border-0
+             bg-transparent py-3 ps-1.5 pe-3 md:ps-3 md:pe-10 text-start text-v2-text-text-muted [font-weight:530]
+@@ -670,13 +746,20 @@
+             suppressClick = false
+ 
+             if (event.pointerType !== "touch") return
+-            clearLongPress()
++            finishTouch()
+             const element = event.currentTarget
++            touch = { element, opened: false }
++            document.addEventListener("pointerdown", nextInteraction, true)
++            document.addEventListener("keydown", finishTouch, true)
++            document.addEventListener("touchend", releaseTouch, { capture: true, passive: false })
++            document.addEventListener("touchcancel", releaseTouch, { capture: true, passive: false })
++            document.addEventListener("click", compatibilityClick, true)
+             const x = event.clientX
+             const y = event.clientY
+             longPressStart = { x, y }
+             longPressTimer = setTimeout(() => {
+               suppressClick = true
++              if (touch) touch.opened = true
+               clearLongPress()
+               openMenu(element, x, y)
+             }, HOME_SESSION_LONG_PRESS_MS)
+@@ -688,14 +771,13 @@
+               return
+             clearLongPress()
+           }}
+-          onPointerUp={clearLongPress}
+-          onPointerCancel={() => {
+-            clearLongPress()
+-            suppressClick = false
+-          }}
++          onPointerUp={settleTouch}
++          // Native contextmenu may follow cancellation before our timer fired.
++          onPointerCancel={clearLongPress}
+           onKeyDown={(event) => {
+             if (event.key !== "ContextMenu" && (event.key !== "F10" || !event.shiftKey)) return
+             event.preventDefault()
++            event.stopPropagation()
+             const bounds = event.currentTarget.getBoundingClientRect()
+             openMenu(event.currentTarget, bounds.left + 12, bounds.bottom)
+           }}
+@@ -756,6 +838,9 @@
+       >
+         <Menu.Trigger
+           as="span"
++          // Kobalte restores focus here even when onCloseAutoFocus is cancelled.
++          // This is only an anchor; it must never steal focus from the editor/dialog.
++          inert
+           aria-hidden="true"
+           tabIndex={-1}
+           class="pointer-events-none absolute size-px"
+@@ -763,7 +848,11 @@
+         />
+         <Menu.Portal>
+           <Menu.Content
+-            onInteractOutside={() => {
++            onInteractOutside={(event) => {
++              if (touch?.opened) {
++                event.preventDefault()
++                return
++              }
+               menuInteractedOutside = true
+             }}
+             onCloseAutoFocus={(event) => {
+@@ -779,12 +868,36 @@
+               requestAnimationFrame(() => rowButton()?.focus())
+             }}
+           >
+-            <Menu.Item onSelect={openEditor}>{props.language.t("common.rename")}</Menu.Item>
++            <Menu.Item
++              closeOnSelect={false}
++              onClick={(event) => {
++                event.preventDefault()
++                openEditor()
++              }}
++              onKeyDown={(event) => {
++                if (event.repeat || (event.key !== "Enter" && event.key !== " ")) return
++                event.preventDefault()
++                openEditor()
++              }}
++            >
++              {props.language.t("common.rename")}
++            </Menu.Item>
+             <Menu.Item onSelect={() => void props.onExportSession(props.server, props.record.session)}>
+               {props.language.t("common.export")}…
+             </Menu.Item>
+             <Menu.Separator />
+-            <Menu.Item onSelect={() => props.onDeleteSession(props.server, props.record.session)}>
++            <Menu.Item
++              closeOnSelect={false}
++              onClick={(event) => {
++                event.preventDefault()
++                deleteSession()
++              }}
++              onKeyDown={(event) => {
++                if (event.repeat || (event.key !== "Enter" && event.key !== " ")) return
++                event.preventDefault()
++                deleteSession()
++              }}
++            >
+               {props.language.t("common.delete")}…
+             </Menu.Item>
+           </Menu.Content>
+--- a/packages/app/e2e/regression/home.spec.ts
++++ b/packages/app/e2e/regression/home.spec.ts
+@@ -80,6 +80,126 @@
+   await openHome(page)
+   await expectAppVisible(row(page, fixture.expected.sourceTitle))
+   location.release()
++})
++
++test.describe("touch Home session actions", () => {
++  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } })
++
++  test.beforeEach(async ({ page }) => {
++    await page.addInitScript(() => Object.defineProperty(navigator, "standalone", { value: true }))
++  })
++
++  for (const opening of ["timer", "native"] as const) {
++    test(`${opening} long press survives release, then accepts a real outside pointer`, async ({ page }) => {
++      await openHome(page)
++      const target = row(page, fixture.expected.targetTitle)
++      await expect(target).toBeVisible()
++      await page.clock.install()
++      await page.clock.pauseAt(new Date())
++      await target.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 1, button: 0 })
++      if (opening === "timer") await page.clock.runFor(500)
++      if (opening === "native") {
++        await target.dispatchEvent("pointercancel", { pointerType: "touch", pointerId: 1 })
++        await target.evaluate((element) =>
++          element.dispatchEvent(new TouchEvent("touchcancel", { bubbles: true, cancelable: true })),
++        )
++        await target.dispatchEvent("contextmenu", { clientX: 48, clientY: 120 })
++      }
++      const rename = page.getByRole("menuitem", { name: "Rename", exact: true })
++      await expect(rename).toBeVisible()
++      await page.clock.runFor(1)
++      await target.dispatchEvent("pointercancel", { pointerType: "touch", pointerId: 1 })
++      await page.evaluate(() =>
++        document.body.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true })),
++      )
++      await target.dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 })
++      await target.dispatchEvent("click", { detail: 1, button: 0 })
++      await page.evaluate(() => document.body.dispatchEvent(new FocusEvent("focusin", { bubbles: true })))
++      await expect(rename).toBeVisible()
++      await expect(page).toHaveURL("/")
++      await page.evaluate(() =>
++        document.body.dispatchEvent(
++          new PointerEvent("pointerdown", {
++            bubbles: true,
++            pointerType: "mouse",
++            button: 0,
++          }),
++        ),
++      )
++      await page.clock.resume()
++      await expect(rename).toBeHidden()
++      await target.tap()
++      await expect(page).toHaveURL(new RegExp(`/session/${fixture.targetID}$`))
++    })
++  }
++
++  test("release protection expires without trapping later focus", async ({ page }) => {
++    await openHome(page)
++    await page.clock.install()
++    const target = row(page, fixture.expected.targetTitle)
++    await expect(target).toBeVisible()
++    await target.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 1, button: 0 })
++    await target.dispatchEvent("contextmenu", { clientX: 48, clientY: 120 })
++    const rename = page.getByRole("menuitem", { name: "Rename", exact: true })
++    await expect(rename).toBeVisible()
++    await page.evaluate(() =>
++      document.body.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true })),
++    )
++    await page.clock.runFor(800)
++    await page.evaluate(() => document.body.dispatchEvent(new FocusEvent("focusin", { bubbles: true })))
++    await expect(rename).toBeHidden()
++  })
++
++  test("touch rename waits for release click and keeps the editor focused", async ({ page }) => {
++    await openHome(page)
++    const target = row(page, fixture.expected.targetTitle)
++    await target.click({ button: "right" })
++    const rename = page.getByRole("menuitem", { name: "Rename", exact: true })
++    await rename.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 2, button: 0 })
++    await rename.dispatchEvent("pointerup", { pointerType: "touch", pointerId: 2, button: 0 })
++    const input = page.locator('[data-component="home-session-rename"]')
++    // Opening on pointerup leaves the input exposed to the subsequent release click.
++    await expect(input).toHaveCount(0)
++    await rename.dispatchEvent("click", { detail: 1, button: 0 })
++    await expect(input).toBeFocused()
++    await expect(input).toHaveValue(fixture.expected.targetTitle)
++    await input.fill("Touch renamed")
++    const saved = page.waitForRequest(
++      (request) =>
++        request.method() === "PATCH" && new URL(request.url()).pathname.endsWith(`/session/${fixture.targetID}`),
++    )
++    await input.press("Enter")
++    expect((await saved).postDataJSON()).toEqual({ title: "Touch renamed" })
++    await expect(row(page, "Touch renamed")).toBeVisible()
++    await row(page, "Touch renamed").click({ button: "right" })
++    await page.getByRole("menuitem", { name: "Rename", exact: true }).tap()
++    await expect(input).toBeFocused()
++    await input.press("Escape")
++    await expect(input).toBeHidden()
++    await expect(row(page, "Touch renamed")).toBeFocused()
++    await row(page, "Touch renamed").click({ button: "right" })
++    await page.getByRole("menuitem", { name: "Rename", exact: true }).tap()
++    await input.fill("Cancelled draft")
++    await page.getByRole("textbox", { name: "Search sessions" }).tap()
++    await expect(input).toBeHidden()
++    await expect(row(page, "Touch renamed")).toBeVisible()
++  })
++
++  test("touch delete waits for release click and keeps the confirmation open", async ({ page }) => {
++    await openHome(page)
++    const target = row(page, fixture.expected.targetTitle)
++    await target.click({ button: "right" })
++    const remove = page.getByRole("menuitem", { name: "Delete…" })
++    await remove.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 2, button: 0 })
++    await remove.dispatchEvent("pointerup", { pointerType: "touch", pointerId: 2, button: 0 })
++    const dialog = page.getByRole("dialog")
++    await expect(dialog).toHaveCount(0)
++    await remove.dispatchEvent("click", { detail: 1, button: 0 })
++    await expect(dialog).toContainText(`Delete session "${fixture.expected.targetTitle}"?`)
++    await dialog.getByRole("button", { name: "Cancel", exact: true }).tap()
++    await expect(dialog).toBeHidden()
++    await expect(target).toBeVisible()
++  })
+ })
+ 
+ test("Home and the directory picker load without newer browser APIs", async ({ page }) => {
+--- /dev/null
++++ b/packages/gui-extensions/src/file/refresh.tsx
+@@ -0,0 +1,44 @@
++import { createSignal, onCleanup } from "solid-js"
++import { showToast } from "@opencode/ui/toast"
++import { createKeyed, useExtension, type MountedSession, type SessionScreen } from "../sdk"
++
++export function createFileTreeRefresh(
++  props: { session: MountedSession; screen: SessionScreen },
++  active: () => boolean,
++) {
++  const ctx = useExtension()
++  const [loading, setLoading] = createSignal(false)
++  let disposed = false
++  onCleanup(() => (disposed = true))
++
++  const refresh = async () => {
++    if (loading()) return
++    const file = props.screen.file
++    const root = file.root
++    const current = () => !disposed && !ctx.signal.aborted && props.screen.file === file && file.root === root
++    const sync = async (path: string): Promise<void> => {
++      await file.tree.sync(path, { force: true })
++      if (!current()) return
++      await Promise.all(
++        file.tree
++          .list(path)
++          .filter((node) => node.type === "directory" && file.tree.state(node.path)?.expanded)
++          .map((node) => sync(node.path)),
++      )
++    }
++    setLoading(true)
++    await sync("")
++      .catch(() => {
++        if (current()) showToast({ variant: "error", title: ctx.t("common.requestFailed") })
++      })
++      .finally(() => {
++        if (!disposed && !ctx.signal.aborted) setLoading(false)
++      })
++  }
++
++  // Re-entering the file view refreshes directory listings, not loaded file contents.
++  createKeyed(
++    () => (active() && props.session.server.connected ? props.screen.file.root : undefined),
++    () => void refresh(),
++  )
++}
+--- a/packages/gui-extensions/src/file/mobile.tsx
++++ b/packages/gui-extensions/src/file/mobile.tsx
+@@ -8,6 +8,7 @@
+ import { SessionFileBrowserTab } from "./browser"
+ import { useShared } from "./context"
+ import { fileTabPath, isFileTab } from "./path"
++import { createFileTreeRefresh } from "./refresh"
+ 
+ const OPEN_FILE_TAB = "open-file"
+ 
+@@ -16,6 +17,7 @@
+   const layout = ctx.layout
+   const shared = useShared()
+   const panel = usePanel()
++  createFileTreeRefresh(props, () => panel.visible())
+   const file = props.screen.file
+   const opened = createMemo(() => panel.open().filter(isFileTab))
+   // The selected side tab when it is a file tab. A gone selection falls back to the first file tab.
+@@ -33,6 +35,12 @@
+ 
+   const open = (path: string) => {
+     shared.open(props.session, path)
++    setStore("browsing", false)
++  }
++
++  const selectTab = (id: string) => {
++    // Selecting an existing tab uses cached content; opening from the list rereads it.
++    layout.open(`file:${id}`, props.session)
+     setStore("browsing", false)
+   }
+ 
+@@ -55,7 +63,7 @@
+             if (browsing()) return
+ 
+             if (id === OPEN_FILE_TAB) return
+-            open(fileTabPath(file, id))
++            selectTab(id)
+           }}
+           variant="line"
+           class="min-w-0 flex-1 !h-auto"
+@@ -65,7 +73,7 @@
+               {(id) => (
+                 <Tabs.Trigger
+                   value={id}
+-                  onClick={() => open(fileTabPath(file, id))}
++                  onClick={() => selectTab(id)}
+                   class="shrink-0 max-w-48"
+                   classes={{ button: "min-w-0" }}
+                   closeButton={
+--- a/packages/gui-extensions/src/file/sidebar.tsx
++++ b/packages/gui-extensions/src/file/sidebar.tsx
+@@ -4,6 +4,7 @@
+ import { createKeyed, useExtension, type MountedSession, type SessionScreen } from "../sdk"
+ import { current, useShared } from "./context"
+ import FileTree from "./tree"
++import { createFileTreeRefresh } from "./refresh"
+ 
+ /** The file tree beside the side panel: the session's changed files, or every workspace file. */
+ export default function FileSidebar(props: { session: MountedSession; screen: SessionScreen }) {
+@@ -40,6 +41,7 @@
+ 
+   // Without the review extension only the workspace files can show.
+   const tab = createMemo(() => (changes() ? shared.tree.tab() : "all"))
++  createFileTreeRefresh(props, () => tab() === "all")
+   const count = createMemo(() => changes()?.diffs(props.session).length ?? 0)
+   const ready = createMemo(() => changes()?.ready(props.session) ?? false)
+   const diffFiles = createMemo(() => (changes()?.diffs(props.session) ?? []).map((diff) => diff.file))
+--- a/packages/app/e2e/regression/mobile-extensions.spec.ts
++++ b/packages/app/e2e/regression/mobile-extensions.spec.ts
+@@ -3,12 +3,27 @@
+ import { fixture, mockStressTimeline } from "../utils/session-fixture"
+ import { fileNode } from "../utils/workspace"
+ 
+-test.use({ viewport: { width: 390, height: 844 } })
++test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
+ 
+ test("mobile files browse, comment, search, and close tabs", async ({ page }) => {
++  const listing = ["first.ts", "second.ts"]
++  const nested = ["src/before.ts"]
++  const contentRequests: string[] = []
++  const contents = new Map<string, string>()
+   await mockStressTimeline(page, {
+-    fileList: (path) => (path ? [] : ["first.ts", "second.ts"].map((name) => fileNode(fixture.directory, name))),
+-    fileContent: (path) => `contents:${path}`,
++    fileList: (path) =>
++      path === "src"
++        ? nested.map((name) => fileNode(fixture.directory, name))
++        : path
++          ? []
++          : [
++              ...listing.map((name) => fileNode(fixture.directory, name)),
++              fileNode(fixture.directory, "src", "directory"),
++            ],
++    fileContent: (path) => {
++      contentRequests.push(path)
++      return contents.get(path) ?? `contents:${path}`
++    },
+     findFiles: ({ query }) =>
+       ["first.ts", "second.ts"].flatMap((path) => (path.includes(query) ? [fileNode(fixture.directory, path)] : [])),
+   })
+@@ -16,6 +31,8 @@
+   const navigation = page.getByRole("tablist", { name: "Session view", exact: true })
+   await navigation.getByRole("tab", { name: "Files", exact: true }).click()
+   const files = page.locator('[data-slot="session-mobile-files"]')
++  await files.getByRole("button", { name: "src", exact: true }).click()
++  await expect(files.getByRole("button", { name: "before.ts", exact: true })).toBeEnabled()
+   await files.getByRole("button", { name: "first.ts", exact: true }).click()
+   await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
+   await files.locator('[data-column-number="1"]').click()
+@@ -50,21 +67,42 @@
+     .click()
+   await expect(session).toHaveAttribute("aria-selected", "true")
+   await expect(page.getByRole("textbox", { name: "Prompt", exact: true })).toBeVisible()
++  listing.push("automatic.ts")
++  nested.splice(0, 1, "src/after.ts")
++  const requestsBeforeReturn = contentRequests.length
+   await navigation.getByRole("tab", { name: "Files", exact: true }).click()
+   await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
+   const filter = files.getByRole("combobox", { name: "Filter files", exact: true })
+   await expect(filter).toBeHidden()
+   await files.getByRole("button", { name: "All files", exact: true }).click()
++  await expect(files.getByRole("button", { name: "second.ts", exact: true })).toBeEnabled()
++  await expect(files.getByRole("button", { name: "automatic.ts", exact: true })).toBeEnabled()
++  await expect(files.getByRole("button", { name: "after.ts", exact: true })).toBeEnabled()
++  await expect(files.getByRole("button", { name: "before.ts", exact: true })).toHaveCount(0)
++  expect(contentRequests).toHaveLength(requestsBeforeReturn)
++  await expect(files.getByRole("button", { name: "Refresh files", exact: true })).toHaveCount(0)
++  await session.click()
++  listing.push("refreshed.ts")
++  await navigation.getByRole("tab", { name: "Files", exact: true }).click()
++  await files.getByRole("button", { name: "All files", exact: true }).click()
++  await expect(files.getByRole("button", { name: "refreshed.ts", exact: true })).toBeEnabled()
+   await filter.fill("second")
+   await files.getByRole("option", { name: "second.ts", exact: true }).click()
+   await expect(files.getByText("contents:second.ts", { exact: true })).toBeVisible()
+   const openTabs = files.getByRole("tablist", { name: "Open files", exact: true })
+   await expect(openTabs.getByRole("tab")).toHaveText(["first.ts", "second.ts"])
++  contents.set("first.ts", "reopened:first.ts")
++  const requestsBeforeSwitch = contentRequests.length
+   await openTabs.getByRole("tab", { name: "first.ts", exact: true }).click()
+   await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
++  expect(contentRequests).toHaveLength(requestsBeforeSwitch)
+   await navigation.getByRole("tab", { name: "Session", exact: true }).click()
+   await navigation.getByRole("tab", { name: "Files", exact: true }).click()
+   await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
++  await files.getByRole("button", { name: "All files", exact: true }).click()
++  await filter.fill("")
++  await files.getByRole("button", { name: "first.ts", exact: true }).click()
++  await expect(files.getByText("reopened:first.ts", { exact: true })).toBeVisible()
+   await files
+     .locator('[data-slot="tabs-v2-trigger-wrapper"]')
+     .filter({ has: page.getByRole("tab", { name: "first.ts", exact: true }) })
+--- a/packages/gui-extensions/src/terminal/terminal.tsx
++++ b/packages/gui-extensions/src/terminal/terminal.tsx
+@@ -7,7 +7,9 @@
+ import { createPtyClient } from "@opencode/client/solid"
+ import type { FitAddon, Terminal as Term } from "ghostty-web"
+ import { Option, Predicate, Schema } from "effect"
+-import { type ComponentProps, createMemo, onCleanup, onMount, splitProps } from "solid-js"
++import { type ComponentProps, createMemo, For, onCleanup, onMount, Show, splitProps } from "solid-js"
++import { createStore } from "solid-js/store"
++import { Button } from "@opencode/ui/button"
+ import { createKeyed, useExtension, type ServerRef } from "../sdk"
+ import type { TerminalModel } from "./model"
+ import type { LocalPTY } from "./state"
+@@ -91,6 +93,7 @@
+ const useTerminalUiBindings = (input: {
+   container: HTMLDivElement
+   term: Term
++  mobile: boolean
+   cleanups: VoidFunction[]
+   handlePointerDown: () => void
+   handleLinkClick: (event: MouseEvent) => void
+@@ -133,8 +136,17 @@
+   input.container.addEventListener("paste", handlePaste, true)
+   input.cleanups.push(() => input.container.removeEventListener("paste", handlePaste, true))
+ 
+-  input.container.addEventListener("pointerdown", input.handlePointerDown)
+-  input.cleanups.push(() => input.container.removeEventListener("pointerdown", input.handlePointerDown))
++  const handlePointerDown = (event: PointerEvent) => {
++    if (input.mobile && event.pointerType === "touch") {
++      // Wait for a tap: focusing here opens the keyboard before a swipe can be identified.
++      event.preventDefault()
++      event.stopPropagation()
++      return
++    }
++    input.handlePointerDown()
++  }
++  input.container.addEventListener("pointerdown", handlePointerDown, input.mobile)
++  input.cleanups.push(() => input.container.removeEventListener("pointerdown", handlePointerDown, input.mobile))
+ 
+   input.container.addEventListener("click", input.handleLinkClick, {
+     capture: true,
+@@ -149,6 +161,70 @@
+   input.term.textarea?.addEventListener("blur", handleTextareaBlur)
+   input.cleanups.push(() => input.term.textarea?.removeEventListener("focus", handleTextareaFocus))
+   input.cleanups.push(() => input.term.textarea?.removeEventListener("blur", handleTextareaBlur))
++
++  if (!input.mobile) return
++
++  // Ghostty renders a canvas, not a native scrollport, and only handles wheel input.
++  // Reuse that path for both scrollback and alternate-screen applications.
++  let touch: { id: number; x: number; startY: number; y: number; delta: number; moved: boolean } | undefined
++  const resetTouch = () => {
++    touch = undefined
++  }
++  const startTouch = (event: TouchEvent) => {
++    resetTouch()
++    if (event.touches.length !== 1) return
++    const point = event.touches[0]
++    if (!point) return
++    touch = { id: point.identifier, x: point.clientX, startY: point.clientY, y: point.clientY, delta: 0, moved: false }
++  }
++  const moveTouch = (event: TouchEvent) => {
++    if (event.touches.length !== 1) return resetTouch()
++    const point = event.touches[0]
++    if (!touch || !point || point.identifier !== touch.id) return
++    if (event.cancelable) event.preventDefault()
++    if (Math.hypot(point.clientX - touch.x, point.clientY - touch.startY) > 8) touch.moved = true
++    touch.delta += touch.y - point.clientY
++    touch.y = point.clientY
++
++    // Accumulate small moves: Ghostty rounds alternate-screen wheel input per 33px.
++    const steps = Math.trunc(touch.delta / 33)
++    if (!steps) return
++    touch.delta -= steps * 33
++    input.container.dispatchEvent(
++      new WheelEvent("wheel", {
++        deltaY: steps * 33,
++        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
++        bubbles: true,
++        cancelable: true,
++      }),
++    )
++  }
++  const endTouch = (event: TouchEvent) => {
++    // Ghostty focuses its textarea on every canvas touchend, including swipes.
++    // Intercept before that listener; only a stationary single-finger tap may focus.
++    if (event.cancelable) event.preventDefault()
++    event.stopPropagation()
++    const point = event.changedTouches[0]
++    const tap =
++      touch &&
++      !touch.moved &&
++      event.touches.length === 0 &&
++      point?.identifier === touch.id &&
++      Math.hypot(point.clientX - touch.x, point.clientY - touch.startY) <= 8
++    resetTouch()
++    if (tap) input.handlePointerDown()
++  }
++  input.container.addEventListener("touchstart", startTouch, { passive: true })
++  input.container.addEventListener("touchmove", moveTouch, { passive: false })
++  input.container.addEventListener("touchend", endTouch, { capture: true, passive: false })
++  input.container.addEventListener("touchcancel", resetTouch)
++  input.cleanups.push(() => {
++    resetTouch()
++    input.container.removeEventListener("touchstart", startTouch)
++    input.container.removeEventListener("touchmove", moveTouch)
++    input.container.removeEventListener("touchend", endTouch, true)
++    input.container.removeEventListener("touchcancel", resetTouch)
++  })
+ }
+ 
+ const persistTerminal = (input: {
+@@ -186,6 +262,11 @@
+   const keybinds = extension.keybinds
+   const system = extension.system
+   const desktop = extension.desktop
++  const mobile =
++    /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
++    // iPadOS can report a desktop Mac UA, but Macs do not expose multiple touch points.
++    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
++  const [keys, setKeys] = createStore({ ctrl: false, connected: false })
+   const theme = useTheme()
+   let container!: HTMLDivElement
+ 
+@@ -401,6 +482,12 @@
+       activeElement.blur()
+     }
+ 
++    focusTerminal()
++  }
++
++  const sendKey = (data: string) => {
++    if (disposed || !term || ws?.readyState !== WebSocket.OPEN) return
++    term.input(data, true)
+     focusTerminal()
+   }
+ 
+@@ -497,6 +584,7 @@
+       useTerminalUiBindings({
+         container,
+         term: t,
++        mobile,
+         cleanups,
+         handlePointerDown,
+         handleLinkClick,
+@@ -534,10 +622,19 @@
+       cleanups.push(() => disposeIfDisposable(onResize))
+ 
+       const onData = t.onData((data) => {
+-        if (ws?.readyState === WebSocket.OPEN) ws.send(data)
++        const input =
++          keys.ctrl && mobile && /^[a-z]$/i.test(data)
++            ? String.fromCharCode(data.toUpperCase().charCodeAt(0) & 31)
++            : data
++
++        if (data) setKeys("ctrl", false)
++        if (ws?.readyState === WebSocket.OPEN) ws.send(input)
+       })
+ 
+       cleanups.push(() => disposeIfDisposable(onData))
++      const releaseCtrl = () => setKeys("ctrl", false)
++      t.textarea?.addEventListener("blur", releaseCtrl)
++      cleanups.push(() => t.textarea?.removeEventListener("blur", releaseCtrl))
+ 
+       const onKey = t.onKey((key) => {
+         if (key.key == "Enter") {
+@@ -662,10 +759,12 @@
+         }
+ 
+         ws = socket
++        setKeys("connected", socket.readyState === WebSocket.OPEN)
+ 
+         const handleOpen = () => {
+           if (disposed) return
+           tries = 0
++          setKeys("connected", true)
+           local.onConnect?.()
+           scheduleSize(t.cols, t.rows)
+ 
+@@ -719,7 +818,10 @@
+           socket.removeEventListener("error", handleError)
+           socket.removeEventListener("close", handleClose)
+ 
+-          if (ws === socket) ws = undefined
++          if (ws === socket) {
++            ws = undefined
++            if (!disposed) setKeys({ connected: false, ctrl: false })
++          }
+ 
+           if (drop === stop) drop = undefined
+ 
+@@ -727,7 +829,10 @@
+         }
+ 
+         const handleClose = (event: CloseEvent) => {
+-          if (ws === socket) ws = undefined
++          if (ws === socket) {
++            ws = undefined
++            if (!disposed) setKeys({ connected: false, ctrl: false })
++          }
+ 
+           if (drop === stop) drop = undefined
+           socket.removeEventListener("open", handleOpen)
+@@ -789,20 +894,74 @@
+   })
+ 
+   return (
+-    <div
+-      ref={container}
+-      data-component="terminal"
+-      dir="ltr"
+-      data-prevent-autofocus
+-      tabIndex={-1}
+-      style={{ "background-color": terminalColors().background, "caret-color": "transparent", opacity: 0 }}
+-      classList={{
+-        ...local.classList,
+-        "select-text": true,
+-        "size-full px-6 py-3 font-mono relative overflow-hidden": true,
+-        [local.class ?? ""]: !!local.class,
+-      }}
+-      {...others}
+-    />
++    <div class="size-full min-h-0 flex flex-col">
++      <div
++        ref={container}
++        data-component="terminal"
++        dir="ltr"
++        data-prevent-autofocus
++        tabIndex={-1}
++        style={{ "background-color": terminalColors().background, "caret-color": "transparent", opacity: 0 }}
++        classList={{
++          ...local.classList,
++          "select-text": true,
++          "w-full min-h-0 flex-1 px-6 py-3 font-mono relative overflow-hidden": true,
++          [local.class ?? ""]: !!local.class,
++        }}
++        {...others}
++      />
++      <Show when={mobile}>
++        <div
++          role="group"
++          aria-label={extension.t("keys.title")}
++          dir="ltr"
++          class="shrink-0 flex flex-nowrap overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden gap-1 px-2 py-1 [&>button:first-child]:ml-auto [&>button:last-child]:mr-auto border-t border-border-weaker-base bg-v2-background-bg-base"
++        >
++          <For
++            each={[
++              { label: "Esc", input: "\x1b" },
++              { label: "Tab", input: "\t" },
++              { label: "Ctrl" },
++              { label: "↑", arrow: "A", aria: "keys.up" },
++              { label: "↓", arrow: "B", aria: "keys.down" },
++              { label: "←", arrow: "D", aria: "keys.left" },
++              { label: "→", arrow: "C", aria: "keys.right" },
++              { label: "Ctrl+C", input: "\x03" },
++              { label: "Ctrl+D", input: "\x04" },
++              { label: "Ctrl+L", input: "\x0c" },
++              { label: "Home", arrow: "H", aria: "keys.home" },
++              { label: "PgUp", input: "\x1b[5~", aria: "keys.pageUp" },
++              { label: "PgDn", input: "\x1b[6~", aria: "keys.pageDown" },
++              { label: "End", arrow: "F", aria: "keys.end" },
++            ]}
++          >
++            {(key) => (
++              <Button
++                size="small"
++                variant={key.label === "Ctrl" && keys.ctrl ? "neutral" : "ghost"}
++                class="!h-9 shrink-0 min-w-9 px-2 touch-manipulation [&[data-variant=ghost]:not(:active)]:!bg-transparent"
++                aria-label={key.aria ? extension.t(key.aria) : key.label}
++                aria-pressed={key.label === "Ctrl" ? keys.ctrl : undefined}
++                disabled={!keys.connected}
++                onPointerDown={(event: PointerEvent) => {
++                  // Keep the terminal textarea focused so tapping a key does not dismiss the mobile keyboard.
++                  event.preventDefault()
++                }}
++                onClick={() => {
++                  if (key.label === "Ctrl") {
++                    setKeys("ctrl", !keys.ctrl)
++                    focusTerminal()
++                    return
++                  }
++                  sendKey(key.arrow ? `\x1b${term?.getMode(1) ? "O" : "["}${key.arrow}` : (key.input ?? ""))
++                }}
++              >
++                {key.label.replace(/^Ctrl\+/, "⌃")}
++              </Button>
++            )}
++          </For>
++        </div>
++      </Show>
++    </div>
+   )
+ }
+--- a/packages/gui-extensions/src/terminal/i18n/en.ts
++++ b/packages/gui-extensions/src/terminal/i18n/en.ts
+@@ -10,4 +10,13 @@
+   "connectionLost.abnormalClose": "WebSocket closed abnormally: {{code}}",
+   "connectionLost.description": "The terminal connection was interrupted. This can happen when the server restarts.",
+   "tab.title": "Terminal",
++  "keys.title": "Terminal keys",
++  "keys.up": "Up arrow",
++  "keys.down": "Down arrow",
++  "keys.left": "Left arrow",
++  "keys.right": "Right arrow",
++  "keys.home": "Home",
++  "keys.pageUp": "Page Up",
++  "keys.pageDown": "Page Down",
++  "keys.end": "End",
+ }
+--- a/packages/app/e2e/regression/terminal-input.spec.ts
++++ b/packages/app/e2e/regression/terminal-input.spec.ts
+@@ -151,6 +151,197 @@
+   )
+ })
+ 
++test.describe("mobile terminal keys", () => {
++  test.use({
++    viewport: { width: 390, height: 844 },
++    hasTouch: true,
++    userAgent: "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36",
++  })
++
++  test("swipes through scrollback and routes full-screen swipes to the PTY", async ({ page }) => {
++    const { pty } = await openSession(page, workspace)
++    await page
++      .getByRole("tablist", { name: "Session view", exact: true })
++      .getByRole("tab", { name: "Terminal", exact: true })
++      .tap()
++    const terminal = page.locator('[data-component="terminal"]')
++    await expect(terminal.locator("textarea")).toHaveCount(1)
++    await expect.poll(() => pty.sockets.length).toBe(1)
++    pty.send("\x1b[?25l" + Array.from({ length: 200 }, (_, i) => `history-${i}\r\n`).join("") + "\x1b[6n")
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toMatch(/\x1b\[\d+;\d+R$/)
++    const ready = pty.sockets[0]!.input.join("")
++    await expect(terminal).toHaveCSS("opacity", "1")
++    const canvas = terminal.locator("canvas")
++    const textarea = terminal.locator("textarea")
++    await textarea.blur()
++    await expect(textarea).not.toBeFocused()
++    await canvas.screenshot()
++    // Compare the text area only, excluding Ghostty's fading scrollbar.
++    const image = () =>
++      canvas.evaluate((element) => {
++        const crop = document.createElement("canvas")
++        crop.width = element.width - 24 * devicePixelRatio
++        crop.height = element.height
++        crop.getContext("2d")!.drawImage(element, 0, 0)
++        return crop.toDataURL()
++      })
++    const bottom = await image()
++    const swipe = (distance: number) =>
++      terminal.evaluate((element, delta) => {
++        const target = element.querySelector("canvas") ?? element
++        const emit = (type: string, y: number, active = true) => {
++          const point = new Touch({ identifier: 1, target, clientX: 100, clientY: y })
++          target.dispatchEvent(
++            new TouchEvent(type, {
++              bubbles: true,
++              cancelable: true,
++              touches: active ? [point] : [],
++              changedTouches: [point],
++            }),
++          )
++        }
++        target.dispatchEvent(
++          new PointerEvent("pointerdown", {
++            pointerType: "touch",
++            pointerId: 1,
++            bubbles: true,
++            cancelable: true,
++          }),
++        )
++        emit("touchstart", 300)
++        // Small moves must accumulate, even in the alternate screen.
++        for (let i = 1; i <= Math.abs(delta); i++) emit("touchmove", 300 + Math.sign(delta) * i)
++        emit("touchend", 300 + delta, false)
++      }, distance)
++
++    await swipe(132)
++    await expect.poll(image).not.toBe(bottom)
++    await expect(textarea).not.toBeFocused()
++    expect(pty.sockets[0]!.input.join("")).toBe(ready)
++    await swipe(-264)
++    await expect.poll(image).toBe(bottom)
++    await expect(textarea).not.toBeFocused()
++
++    pty.send("\x1b[?1049hfull-screen\x1b[6n")
++    // Cursor response proves the mode switch has been processed before the gesture.
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toMatch(/^\x1b\[\d+;\d+R\x1b\[\d+;\d+R$/)
++    const response = pty.sockets[0]!.input.join("")
++    await swipe(66)
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(response + "\x1b[A\x1b[A")
++    await swipe(-66)
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(response + "\x1b[A\x1b[A\x1b[B\x1b[B")
++    await expect(textarea).not.toBeFocused()
++    await canvas.tap()
++    await expect(textarea).toBeFocused()
++  })
++
++  test("sends auxiliary keys without losing focus and releases Ctrl after one input", async ({ page }) => {
++    const { pty } = await openSession(page, workspace)
++    await page
++      .getByRole("tablist", { name: "Session view", exact: true })
++      .getByRole("tab", { name: "Terminal", exact: true })
++      .tap()
++    const terminal = page.locator('[data-component="terminal"]')
++    await expect(terminal.locator("textarea")).toHaveCount(1)
++    await expect.poll(() => pty.sockets.length).toBe(1)
++    pty.send("ready")
++    await expect(terminal).toHaveCSS("opacity", "1")
++    await terminal.tap()
++    const keys = page.getByRole("group", { name: "Terminal keys", exact: true })
++    const ctrl = keys.getByRole("button", { name: "Ctrl", exact: true })
++    await expect(ctrl).toBeEnabled()
++    await expect(keys).toHaveCSS("scrollbar-width", "none")
++    await expect
++      .poll(() =>
++        keys.evaluate(
++          (element) =>
++            element.scrollWidth > element.clientWidth &&
++            new Set(Array.from(element.querySelectorAll("button"), (button) => button.offsetTop)).size === 1,
++        ),
++      )
++      .toBe(true)
++    const sent: string[] = []
++    for (const [label, input] of [
++      ["Esc", "\x1b"],
++      ["Tab", "\t"],
++      ["Up arrow", "\x1b[A"],
++      ["Down arrow", "\x1b[B"],
++      ["Left arrow", "\x1b[D"],
++      ["Right arrow", "\x1b[C"],
++      ["Ctrl+C", "\x03"],
++      ["Ctrl+D", "\x04"],
++      ["Ctrl+L", "\x0c"],
++      ["Home", "\x1b[H"],
++      ["Page Up", "\x1b[5~"],
++      ["Page Down", "\x1b[6~"],
++      ["End", "\x1b[F"],
++    ]) {
++      await keys.getByRole("button", { name: label, exact: true }).tap()
++      await expect(keys.getByRole("button", { name: label, exact: true })).toHaveCSS(
++        "background-color",
++        "rgba(0, 0, 0, 0)",
++      )
++      sent.push(input)
++      await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
++      await expect(terminal.locator("textarea")).toBeFocused()
++    }
++    await expect.poll(() => keys.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0)
++    await ctrl.tap()
++    await expect(ctrl).toHaveAttribute("aria-pressed", "true")
++    await page.keyboard.insertText("c")
++    sent.push("\x03")
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
++    await expect(ctrl).toHaveAttribute("aria-pressed", "false")
++    await page.keyboard.insertText("x")
++    sent.push("x")
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
++    await page.setViewportSize({ width: 1440, height: 900 })
++    await expect(keys).toBeVisible()
++    await expect(ctrl).toBeEnabled()
++    await terminal.tap()
++    await expect(terminal.locator("textarea")).toBeFocused()
++    await ctrl.tap()
++    await expect(ctrl).toHaveAttribute("aria-pressed", "true")
++    await page.keyboard.insertText("c")
++    sent.push("\x03")
++    await expect.poll(() => pty.sockets.flatMap((socket) => socket.input).join("")).toBe(sent.join(""))
++    await expect(ctrl).toHaveAttribute("aria-pressed", "false")
++  })
++})
++
++for (const device of [
++  {
++    name: "iOS",
++    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
++    visible: true,
++  },
++  {
++    name: "desktop",
++    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
++    visible: false,
++  },
++]) {
++  test.describe(`${device.name} terminal key visibility`, () => {
++    test.use({ viewport: { width: 390, height: 844 }, userAgent: device.userAgent })
++    test("uses the operating system rather than viewport width", async ({ page }) => {
++      await openSession(page, workspace)
++      await page
++        .getByRole("tablist", { name: "Session view", exact: true })
++        .getByRole("tab", { name: "Terminal", exact: true })
++        .click()
++      await expect(page.locator('[data-component="terminal"] textarea')).toHaveCount(1)
++      const keys = page.getByRole("group", { name: "Terminal keys", exact: true })
++      if (device.visible) {
++        await expect(keys).toBeVisible()
++        await page.setViewportSize({ width: 1440, height: 900 })
++        await expect(keys).toBeVisible()
++        return
++      }
++      await expect(keys).toHaveCount(0)
++    })
++  })
++}
++
+ function legacyTerminalKey() {
+   const dir = base64Encode("C:/OpenCode/TerminalInput")
+   const head = dir.slice(0, 12).replace(/[^a-zA-Z0-9._-]/g, "-")
+--- a/packages/gui-extensions/src/file/browser.tsx
++++ b/packages/gui-extensions/src/file/browser.tsx
+@@ -20,6 +20,7 @@
+ import { fileTabPath, isFileTab } from "./path"
+ import FileTreeV2 from "./tree-v2"
+ import { SessionFileView } from "./view"
++import { createFileTreeRefresh } from "./refresh"
+ 
+ const emptyFiles: string[] = []
+ 
+@@ -215,6 +216,7 @@
+   screen: SessionScreen
+ }) {
+   const panel = usePanel()
++  createFileTreeRefresh(props, () => panel.visible())
+   const shared = useShared()
+   const id = () => props.tab().id
+   const placeholder = () => !isFileTab(id())
+--- a/packages/app/e2e/regression/side-panels.spec.ts
++++ b/packages/app/e2e/regression/side-panels.spec.ts
+@@ -1,7 +1,41 @@
+ import { expect, test, type Locator, type Page } from "@playwright/test"
+ import { tabKey } from "../utils/app"
+-import { fileDiff, openSession } from "../utils/workspace"
++import { fileDiff, fileNode, openSession } from "../utils/workspace"
+ import { expectSessionTitle } from "../utils/waits"
++
++test("returning to files refreshes listings; reopening a file rereads content but switching tabs uses cache", async ({
++  page,
++}) => {
++  await page.setViewportSize({ width: 1440, height: 900 })
++  const directory = "C:/OpenCode/FileReturn"
++  const listing = ["first.ts"]
++  const contentRequests: string[] = []
++  const contents = new Map<string, string>()
++  await openSession(page, {
++    name: "FileReturn",
++    fileList: (path) => (path ? [] : listing.map((name) => fileNode(directory, name))),
++    fileContent: (path) => {
++      contentRequests.push(path)
++      return { type: "text", content: contents.get(path) ?? `contents:${path}` }
++    },
++    seed: { panes: { ses_filereturn: { review: true } } },
++  })
++  const panel = page.locator("#review-panel")
++  await panel.getByRole("button", { name: "Open file", exact: true }).click()
++  await panel.getByRole("button", { name: "first.ts", exact: true }).click()
++  await expect(panel.getByText("contents:first.ts", { exact: true })).toBeVisible()
++  await panel.getByRole("tab", { name: "Review", exact: true }).click()
++  listing.push("automatic.ts")
++  contents.set("first.ts", "reopened:first.ts")
++  const requestsBeforeReturn = contentRequests.length
++  await panel.getByRole("tab", { name: "first.ts", exact: true }).click()
++  await expect(panel.getByRole("button", { name: "automatic.ts", exact: true })).toBeEnabled()
++  await expect(panel.getByText("contents:first.ts", { exact: true })).toBeVisible()
++  expect(contentRequests).toHaveLength(requestsBeforeReturn)
++  await panel.getByRole("button", { name: "Open file", exact: true }).click()
++  await panel.getByRole("button", { name: "first.ts", exact: true }).click()
++  await expect(panel.getByText("reopened:first.ts", { exact: true })).toBeVisible()
++})
+ 
+ test("review and terminal follow the session tab and stay mounted", async ({ page }) => {
+   await page.setViewportSize({ width: 1440, height: 900 })
+--- a/packages/gui-extensions/src/file/renderer.tsx
++++ b/packages/gui-extensions/src/file/renderer.tsx
+@@ -97,7 +97,7 @@
+     if (!screen) return
+ 
+     layout.open(key(screen.file, path), session, options)
+-    void screen.file.sync(path)
++    void screen.file.sync(path, { force: true })
+   }
+ 
+   const shared: FileShared = {
+--- a/packages/app/src/session/timeline/virtualizer.tsx
++++ b/packages/app/src/session/timeline/virtualizer.tsx
+@@ -193,7 +193,16 @@
+       reportRect = callback
+ 
+       return observeElementRect(instance, (rect) => {
+-        if (active()) callback(rect)
++        if (!active()) return
++        // Android's keyboard resizes the scrollport, not its contents or composer.
++        // Keep an already-following timeline at the end without moving history readers.
++        const follow =
++          /Android/i.test(navigator.userAgent) &&
++          input.pinned() &&
++          instance.scrollRect !== null &&
++          rect.height !== instance.scrollRect.height
++        callback(rect)
++        if (follow) instance.scrollToEnd()
+       })
+     },
+     // Route navigation detaches and reattaches the scroll element, which drops its offset.
+--- a/packages/app/e2e/regression/mobile-timeline-scroll.spec.ts
++++ b/packages/app/e2e/regression/mobile-timeline-scroll.spec.ts
+@@ -16,6 +16,54 @@
+ // Compositor prediction can add 20–25px to discrete CDP moves even in a plain
+ // scrollport. Disable it so the visual assertion measures the supplied gesture.
+ test.use({ colorScheme: "light", launchOptions: { args: ["--disable-features=ResamplingScrollEvents"] } })
++
++test.describe("keyboard viewport", () => {
++  test.use({
++    isMobile: true,
++    hasTouch: true,
++    userAgent: devices["Pixel 7"].userAgent,
++    viewport: { width: 390, height: 844 },
++  })
++
++  for (const following of [true, false]) {
++    test(`viewport shrink ${following ? "keeps latest messages above the composer" : "preserves history reading position"}`, async ({
++      page,
++    }) => {
++      const content = Array.from({ length: 60 }, (_, index) => `Keyboard viewport message ${index}.`).join("\n\n")
++      await setupTimeline(page, {
++        messages: [userMessage(), assistantMessage([textPart("prt_keyboard_viewport", content)])],
++        viewport: { width: 390, height: 844 },
++      })
++      const scroller = page
++        .locator('[data-slot="session-timeline-scroll"]')
++        .getByRole("region", { name: "scrollable content", exact: true })
++      const distance = () =>
++        scroller.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)
++      await expect(page.getByText("Keyboard viewport message 59.", { exact: true })).toBeInViewport()
++      await expect.poll(distance).toBeLessThanOrEqual(2)
++      await page.getByRole("textbox", { name: "Prompt", exact: true }).focus()
++      if (!following) {
++        await scroller.press("PageUp")
++        await expect.poll(distance).toBeGreaterThan(200)
++        await page.getByRole("textbox", { name: "Prompt", exact: true }).focus()
++      }
++      const before = await scroller.evaluate((element) => ({ height: element.clientHeight, top: element.scrollTop }))
++      // Android's resizes-content keyboard shrinks the layout viewport without changing its width.
++      await page.setViewportSize({ width: 390, height: 500 })
++      await expect.poll(() => scroller.evaluate((element) => element.clientHeight)).toBeLessThan(before.height)
++      if (following) {
++        await expect.poll(distance).toBeLessThanOrEqual(2)
++        await expect(page.getByText("Keyboard viewport message 59.", { exact: true })).toBeInViewport()
++      } else {
++        await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(before.top, 0)
++      }
++      await page.setViewportSize({ width: 390, height: 844 })
++      await expect.poll(() => scroller.evaluate((element) => element.clientHeight)).toBe(before.height)
++      if (following) await expect.poll(distance).toBeLessThanOrEqual(2)
++      else await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(before.top, 0)
++    })
++  }
++})
+ 
+ for (const device of ["Pixel 7", "iPhone 13"]) {
+   test.describe(device, () => {
