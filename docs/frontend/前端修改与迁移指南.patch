@@ -359,7 +359,7 @@
            </Menu.Content>
 --- a/packages/app/e2e/regression/home.spec.ts
 +++ b/packages/app/e2e/regression/home.spec.ts
-@@ -80,6 +80,126 @@
+@@ -109,6 +109,126 @@
    await openHome(page)
    await expectAppVisible(row(page, fixture.expected.sourceTitle))
    location.release()
@@ -602,12 +602,26 @@
    const diffFiles = createMemo(() => (changes()?.diffs(props.session) ?? []).map((diff) => diff.file))
 --- a/packages/app/e2e/regression/mobile-extensions.spec.ts
 +++ b/packages/app/e2e/regression/mobile-extensions.spec.ts
-@@ -3,12 +3,27 @@
+@@ -3,13 +3,16 @@
  import { fixture, mockStressTimeline } from "../utils/session-fixture"
  import { fileNode } from "../utils/workspace"
  
 -test.use({ viewport: { width: 390, height: 844 } })
 +test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
+ 
+ async function openFiles(page: Page) {
+   await page
+     .getByRole("tablist", { name: "Session view", exact: true })
+     .getByRole("tab", { name: "More...", exact: true })
+     .click()
++  const drawer = page.getByRole("dialog", { name: "More options", exact: true })
++  await expect.poll(() => drawer.evaluate((element) => new DOMMatrix(getComputedStyle(element).transform).m42)).toBe(0)
++  await expect(drawer).not.toHaveAttribute("data-transitioning", "")
+   await page
+     .getByRole("dialog", { name: "More options", exact: true })
+     .getByRole("button", { name: "Files", exact: true })
+@@ -17,9 +20,24 @@
+ }
  
  test("mobile files browse, comment, search, and close tabs", async ({ page }) => {
 +  const listing = ["first.ts", "second.ts"]
@@ -633,23 +647,23 @@
      findFiles: ({ query }) =>
        ["first.ts", "second.ts"].flatMap((path) => (path.includes(query) ? [fileNode(fixture.directory, path)] : [])),
    })
-@@ -16,6 +31,8 @@
+@@ -27,6 +45,8 @@
    const navigation = page.getByRole("tablist", { name: "Session view", exact: true })
-   await navigation.getByRole("tab", { name: "Files", exact: true }).click()
+   await openFiles(page)
    const files = page.locator('[data-slot="session-mobile-files"]')
 +  await files.getByRole("button", { name: "src", exact: true }).click()
 +  await expect(files.getByRole("button", { name: "before.ts", exact: true })).toBeEnabled()
    await files.getByRole("button", { name: "first.ts", exact: true }).click()
    await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
    await files.locator('[data-column-number="1"]').click()
-@@ -50,21 +67,42 @@
+@@ -61,21 +81,42 @@
      .click()
    await expect(session).toHaveAttribute("aria-selected", "true")
    await expect(page.getByRole("textbox", { name: "Prompt", exact: true })).toBeVisible()
 +  listing.push("automatic.ts")
 +  nested.splice(0, 1, "src/after.ts")
 +  const requestsBeforeReturn = contentRequests.length
-   await navigation.getByRole("tab", { name: "Files", exact: true }).click()
+   await openFiles(page)
    await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
    const filter = files.getByRole("combobox", { name: "Filter files", exact: true })
    await expect(filter).toBeHidden()
@@ -662,7 +676,7 @@
 +  await expect(files.getByRole("button", { name: "Refresh files", exact: true })).toHaveCount(0)
 +  await session.click()
 +  listing.push("refreshed.ts")
-+  await navigation.getByRole("tab", { name: "Files", exact: true }).click()
++  await openFiles(page)
 +  await files.getByRole("button", { name: "All files", exact: true }).click()
 +  await expect(files.getByRole("button", { name: "refreshed.ts", exact: true })).toBeEnabled()
    await filter.fill("second")
@@ -676,7 +690,7 @@
    await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
 +  expect(contentRequests).toHaveLength(requestsBeforeSwitch)
    await navigation.getByRole("tab", { name: "Session", exact: true }).click()
-   await navigation.getByRole("tab", { name: "Files", exact: true }).click()
+   await openFiles(page)
    await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
 +  await files.getByRole("button", { name: "All files", exact: true }).click()
 +  await filter.fill("")
@@ -851,7 +865,7 @@
  
        const onKey = t.onKey((key) => {
          if (key.key == "Enter") {
-@@ -662,10 +759,12 @@
+@@ -663,10 +760,12 @@
          }
  
          ws = socket
@@ -864,7 +878,7 @@
            local.onConnect?.()
            scheduleSize(t.cols, t.rows)
  
-@@ -719,7 +818,10 @@
+@@ -720,7 +819,10 @@
            socket.removeEventListener("error", handleError)
            socket.removeEventListener("close", handleClose)
  
@@ -876,7 +890,7 @@
  
            if (drop === stop) drop = undefined
  
-@@ -727,7 +829,10 @@
+@@ -728,7 +830,10 @@
          }
  
          const handleClose = (event: CloseEvent) => {
@@ -888,7 +902,7 @@
  
            if (drop === stop) drop = undefined
            socket.removeEventListener("open", handleOpen)
-@@ -789,20 +894,74 @@
+@@ -790,20 +895,74 @@
    })
  
    return (
@@ -996,7 +1010,7 @@
  }
 --- a/packages/app/e2e/regression/terminal-input.spec.ts
 +++ b/packages/app/e2e/regression/terminal-input.spec.ts
-@@ -151,6 +151,197 @@
+@@ -182,6 +182,232 @@
    )
  })
  
@@ -1011,7 +1025,19 @@
 +    const { pty } = await openSession(page, workspace)
 +    await page
 +      .getByRole("tablist", { name: "Session view", exact: true })
-+      .getByRole("tab", { name: "Terminal", exact: true })
++      .getByRole("tab", { name: "More...", exact: true })
++      .tap()
++    await page.getByRole("dialog", { name: "More options", exact: true }).evaluate(async (element) => {
++      await Promise.all(
++        element
++          .getAnimations()
++          .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
++          .map((animation) => animation.finished.catch(() => {})),
++      )
++    })
++    await page
++      .getByRole("dialog", { name: "More options", exact: true })
++      .getByRole("button", { name: "Terminal", exact: true })
 +      .tap()
 +    const terminal = page.locator('[data-component="terminal"]')
 +    await expect(terminal.locator("textarea")).toHaveCount(1)
@@ -1039,15 +1065,14 @@
 +      terminal.evaluate((element, delta) => {
 +        const target = element.querySelector("canvas") ?? element
 +        const emit = (type: string, y: number, active = true) => {
-+          const point = new Touch({ identifier: 1, target, clientX: 100, clientY: y })
-+          target.dispatchEvent(
-+            new TouchEvent(type, {
-+              bubbles: true,
-+              cancelable: true,
-+              touches: active ? [point] : [],
-+              changedTouches: [point],
-+            }),
-+          )
++          // Desktop WebKit exposes Touch but does not allow constructing it.
++          const point = { identifier: 1, target, clientX: 100, clientY: y }
++          const event = new Event(type, { bubbles: true, cancelable: true })
++          Object.defineProperties(event, {
++            touches: { value: active ? [point] : [] },
++            changedTouches: { value: [point] },
++          })
++          target.dispatchEvent(event)
 +        }
 +        target.dispatchEvent(
 +          new PointerEvent("pointerdown", {
@@ -1088,7 +1113,19 @@
 +    const { pty } = await openSession(page, workspace)
 +    await page
 +      .getByRole("tablist", { name: "Session view", exact: true })
-+      .getByRole("tab", { name: "Terminal", exact: true })
++      .getByRole("tab", { name: "More...", exact: true })
++      .tap()
++    await page.getByRole("dialog", { name: "More options", exact: true }).evaluate(async (element) => {
++      await Promise.all(
++        element
++          .getAnimations()
++          .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
++          .map((animation) => animation.finished.catch(() => {})),
++      )
++    })
++    await page
++      .getByRole("dialog", { name: "More options", exact: true })
++      .getByRole("button", { name: "Terminal", exact: true })
 +      .tap()
 +    const terminal = page.locator('[data-component="terminal"]')
 +    await expect(terminal.locator("textarea")).toHaveCount(1)
@@ -1176,7 +1213,19 @@
 +      await openSession(page, workspace)
 +      await page
 +        .getByRole("tablist", { name: "Session view", exact: true })
-+        .getByRole("tab", { name: "Terminal", exact: true })
++        .getByRole("tab", { name: "More...", exact: true })
++        .click()
++      await page.getByRole("dialog", { name: "More options", exact: true }).evaluate(async (element) => {
++        await Promise.all(
++          element
++            .getAnimations()
++            .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
++            .map((animation) => animation.finished.catch(() => {})),
++        )
++      })
++      await page
++        .getByRole("dialog", { name: "More options", exact: true })
++        .getByRole("button", { name: "Terminal", exact: true })
 +        .click()
 +      await expect(page.locator('[data-component="terminal"] textarea')).toHaveCount(1)
 +      const keys = page.getByRole("group", { name: "Terminal keys", exact: true })
@@ -1270,7 +1319,7 @@
    const shared: FileShared = {
 --- a/packages/app/src/session/timeline/virtualizer.tsx
 +++ b/packages/app/src/session/timeline/virtualizer.tsx
-@@ -193,7 +193,16 @@
+@@ -201,7 +201,16 @@
        reportRect = callback
  
        return observeElementRect(instance, (rect) => {
