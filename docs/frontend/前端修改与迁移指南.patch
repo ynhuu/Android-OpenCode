@@ -1280,3 +1280,136 @@
  
  for (const device of ["Pixel 7", "iPhone 13"]) {
    test.describe(device, () => {
+--- a/packages/app/src/shell/titlebar/tab-strip.tsx
++++ b/packages/app/src/shell/titlebar/tab-strip.tsx
+@@ -302,6 +302,10 @@
+     >
+       <div
+         data-slot={vertical() ? "vertical-tabs-scroll" : "titlebar-tabs-scroll"}
++        on:touchmove={(event) => {
++          // Keep the drawer's document-level scroll lock out of this native scrollport.
++          if (vertical()) event.stopPropagation()
++        }}
+         class="flex min-w-0 no-scrollbar [app-region:no-drag]"
+         classList={{
+           "flex-row items-center gap-1.5 overflow-x-auto": !vertical(),
+@@ -313,7 +317,10 @@
+             PointerSensor.configure({
+               activationConstraints: (event) =>
+                 event.pointerType === "touch"
+-                  ? [new PointerActivationConstraints.Distance({ value: 8 })]
++                  ? vertical()
++                    // Let a swipe scroll; only a stationary hold starts reordering.
++                    ? [new PointerActivationConstraints.Delay({ value: 350, tolerance: 8 })]
++                    : [new PointerActivationConstraints.Distance({ value: 8 })]
+                   : [new PointerActivationConstraints.Distance({ value: 4 })],
+               preventActivation: (event) =>
+                 event.target instanceof Element &&
+--- a/packages/app/e2e/regression/tabs.spec.ts
++++ b/packages/app/e2e/regression/tabs.spec.ts
+@@ -134,6 +134,80 @@
+     await expect(page.locator('[data-slot="titlebar-tabs"]')).toHaveCount(0)
+   })
+ }
++
++test.describe("mobile tab touch gestures", () => {
++  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 720 } })
++
++  test("swiping scrolls without reordering, while holding enables reordering", async ({ page }) => {
++    const directory = "C:/OpenCode/Tabs"
++    await mockWorkspace(page, {
++      name: "Tabs",
++      sessions: [a, b],
++      seed: {
++        tabs: [a.id, b.id, ...Array.from({ length: 24 }, (_, index) => ({ draft: `draft_touch_${index}`, directory }))],
++      },
++    })
++    await page.goto(sessionHref(a.id))
++    await page.getByRole("button", { name: "Tabs", exact: true }).click()
++    const drawer = page.locator('[data-slot="mobile-tabs-drawer"]')
++    const slots = drawer.locator("[data-titlebar-tab-slot]")
++    const scroll = drawer.locator('[data-slot="vertical-tabs-scroll"]')
++    await expect(slots).toHaveCount(26)
++    const order = () => slots.evaluateAll((elements) => elements.map((element) => element.getAttribute("data-tab-key")))
++    const initialOrder = await order()
++    await expect.poll(() => scroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0)
++    await page.waitForTimeout(400)
++    // Simulate an outer modal scroll lock misclassifying an iOS standalone swipe.
++    await page.evaluate(() => {
++      document.documentElement.dataset.blockedTabMoves = "0"
++      document.addEventListener("touchmove", (event) => {
++        document.documentElement.dataset.blockedTabMoves = String(Number(document.documentElement.dataset.blockedTabMoves) + 1)
++        event.preventDefault()
++      }, { passive: false })
++    })
++
++    const client = await page.context().newCDPSession(page)
++    const touch = (type: "touchStart" | "touchMove" | "touchEnd", x = 0, y = 0) =>
++      client.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y }] })
++    const box = await slots.nth(3).boundingBox()
++    if (!box) throw new Error("tab has no bounding box")
++    const x = box.x + box.width / 2
++    const y = box.y + box.height / 2
++    await touch("touchStart", x, y)
++    for (let offset = 20; offset <= 120; offset += 20) await touch("touchMove", x, y - offset)
++    await touch("touchEnd")
++    await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
++    await expect(page.locator("html")).toHaveAttribute("data-blocked-tab-moves", "0")
++    // Wait beyond the hold threshold to catch a timer that was not canceled by the swipe.
++    await page.waitForTimeout(450)
++    expect(await order()).toEqual(initialOrder)
++    await expectPath(page, sessionHref(a.id))
++
++    // Start the hold on a fresh drawer, without residual native swipe momentum.
++    await page.reload()
++    await page.getByRole("button", { name: "Tabs", exact: true }).click()
++    await expect(slots).toHaveCount(26)
++    await page.waitForTimeout(400)
++    await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBe(0)
++    const first = await slots.first().boundingBox()
++    const second = await slots.nth(1).boundingBox()
++    if (!first || !second) throw new Error("tabs have no bounding boxes")
++    const holdX = first.x + first.width / 2
++    const holdY = first.y + first.height / 2
++    await touch("touchStart", holdX, holdY)
++    // Hold past both the sorting threshold and the context menu's 700 ms timer.
++    await page.waitForTimeout(900)
++    await expect(page.getByRole("menu")).toHaveCount(0)
++    await touch("touchMove", holdX, second.y + second.height / 2)
++    await expect.poll(order).not.toEqual(initialOrder)
++    await touch("touchEnd")
++    await expect.poll(order).toEqual([initialOrder[1], initialOrder[0], ...initialOrder.slice(2)])
++    await expectPath(page, sessionHref(a.id))
++    await client.detach()
++    await slots.first().locator("[data-titlebar-tab-link]").click({ button: "right" })
++    await expect(page.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible()
++  })
++})
+ 
+ test("vertical tabs resize, scroll, show shortcut hints, and navigate", async ({ page }) => {
+   await page.setViewportSize({ width: 1280, height: 480 })
+--- a/packages/app/src/shell/titlebar/tab-nav.tsx
++++ b/packages/app/src/shell/titlebar/tab-nav.tsx
+@@ -41,6 +41,7 @@
+   const language = useLanguage()
+   const [menu, setMenu] = createStore({ open: false, rename: false })
+   const [editing, setEditing] = createSignal(false)
++  const [suppressTouchMenu, setSuppressTouchMenu] = createSignal(false)
+   const [titleOverflowing, setTitleOverflowing] = createSignal(false)
+   let tabRoot!: HTMLDivElement
+   let titleEl!: HTMLSpanElement
+@@ -249,7 +250,13 @@
+       </Show>
+       <Menu.Context.Trigger
+         as="a"
+-        disabled={editing() || props.dragging}
++        disabled={editing() || props.dragging || suppressTouchMenu()}
++        onPointerDown={(event) => {
++          if (props.orientation !== "vertical" || event.pointerType !== "touch") return
++          // Kobalte checks disabled after this handler; do not arm its long-press timer.
++          setSuppressTouchMenu(true)
++          queueMicrotask(() => setSuppressTouchMenu(false))
++        }}
+         aria-haspopup="menu"
+         aria-expanded={menu.open}
+         data-slot="tab-link"
