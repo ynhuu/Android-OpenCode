@@ -1349,7 +1349,15 @@
      list(input) {
 --- a/packages/app/src/session/timeline/virtualizer.tsx
 +++ b/packages/app/src/session/timeline/virtualizer.tsx
-@@ -201,7 +201,19 @@
+@@ -188,6 +188,7 @@
+   let maxScroll = 0
+   let virtualContent: HTMLDivElement | undefined
+   let scrollTop = 0
++  let reading: { offset: number; pinned: boolean } | undefined
+   let reportOffset: ((offset: number, scrolling: boolean) => void) | undefined
+   let reportRect: ((rect: { width: number; height: number }) => void) | undefined
+   let batchingColdSizes = false
+@@ -201,7 +202,19 @@
        reportRect = callback
  
        return observeElementRect(instance, (rect) => {
@@ -1370,13 +1378,70 @@
        })
      },
      // Route navigation detaches and reattaches the scroll element, which drops its offset.
+@@ -232,6 +245,8 @@
+ 
+       return observeElementOffsetReconnectAware(instance, reportOffset, () => {
+         if (!active()) return
++
++        if (reading && !reading.pinned) input.onUnpin()
+         virtualContent?.querySelectorAll<HTMLDivElement>("[data-index]").forEach(virtualizer.measureElement)
+ 
+         if (input.pinned()) virtualizer.scrollToEnd()
+@@ -490,6 +505,29 @@
+ 
+   const virtualRowKeys = createMemo(() => virtualizer.getVirtualItems().map((item) => String(item.key)))
+ 
++  onMount(() => {
++    // Capture before a navigation click detaches this cached timeline, including
++    // writes whose native scroll event has not been delivered yet.
++    const save = (event: MouseEvent) => {
++      const root = listRoot()
++
++      if (
++        !active() ||
++        !root?.isConnected ||
++        !(event.target instanceof Element) ||
++        !event.target.closest('[data-slot="session-mobile-view-navigation"]')
++      )
++        return
++      reading = {
++        offset: Math.max(0, root.scrollTop + rendering.scrollAdjustment),
++        pinned: input.pinned() && root.scrollHeight - root.clientHeight - root.scrollTop <= endEpsilon,
++      }
++    }
++
++    document.addEventListener("click", save, true)
++    onCleanup(() => document.removeEventListener("click", save, true))
++  })
++
+   createEffect(() => {
+     if (!active()) return
+     const root = listRoot()
+@@ -507,7 +545,17 @@
+       const target = input.reveal?.target()
+ 
+       if (target && revealPart(target)) input.reveal?.done()
+-      else if (input.pinned()) virtualizer.scrollToEnd()
++      else if (reading?.pinned ?? input.pinned()) virtualizer.scrollToEnd()
++      else if (reading) {
++        input.onUnpin()
++        const offset = reading.offset
++
++        requestAnimationFrame(() => {
++          if (!active() || !root.isConnected) return
++          root.scrollTo({ top: offset, behavior: "instant" })
++          reportOffset?.(root.scrollTop, false)
++        })
++      }
+ 
+       reportOffset?.(root.scrollTop, false)
+       settleColdBottom()
 --- a/packages/app/e2e/regression/mobile-timeline-scroll.spec.ts
 +++ b/packages/app/e2e/regression/mobile-timeline-scroll.spec.ts
-@@ -16,6 +16,62 @@
- // Compositor prediction can add 20–25px to discrete CDP moves even in a plain
+@@ -17,6 +17,62 @@
  // scrollport. Disable it so the visual assertion measures the supplied gesture.
  test.use({ colorScheme: "light", launchOptions: { args: ["--disable-features=ResamplingScrollEvents"] } })
-+
+ 
 +test.describe("keyboard viewport", () => {
 +  test.use({
 +    isMobile: true,
@@ -1432,9 +1497,68 @@
 +    })
 +  }
 +})
- 
++
  for (const device of ["Pixel 7", "iPhone 13"]) {
    test.describe(device, () => {
+     // Chromium drives native touch input, including the virtualizer's iOS user-agent path.
+@@ -26,6 +82,57 @@
+       userAgent: devices[device].userAgent,
+       viewport: { width: 390, height: 844 },
+     })
++
++    if (device === "iPhone 13") {
++      test("returning from another view preserves history reading position", async ({ page }) => {
++        const content = Array.from({ length: 100 }, (_, index) => `View switch message ${index}.`).join("\n\n")
++        await setupTimeline(page, {
++          messages: [userMessage(), assistantMessage([textPart("prt_view_switch", content)])],
++          viewport: { width: 390, height: 844 },
++          fileList: () => [],
++          pty: {},
++        })
++
++        const scroller = page
++          .locator('[data-slot="session-timeline-scroll"]')
++          .getByRole("region", { name: "scrollable content", exact: true })
++
++        await expect(page.getByText("View switch message 99.", { exact: true })).toBeInViewport()
++        await scroller.press("PageUp")
++        await scroller.press("PageUp")
++        const before = await scroller.evaluate((element) => element.scrollTop)
++        const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
++        await tabs.getByRole("tab", { name: "Changes", exact: true }).click()
++        await tabs.getByRole("tab", { name: "Session", exact: true }).click()
++        await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(before, 0)
++
++        // Leave in the same task as a native offset change, before its scroll event.
++        const finalOffset = await scroller.evaluate((element) => {
++          element.scrollTop = Math.max(0, element.scrollTop - 150)
++          const top = element.scrollTop
++          const tabs = document.querySelector('[data-slot="session-mobile-view-tabs"]')!
++
++          const changes = Array.from(tabs.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
++            (button) => button.textContent?.trim() === "Changes",
++          )!
++
++          changes.click()
++
++          return top
++        })
++
++        await tabs.getByRole("tab", { name: "Changes", exact: true }).click()
++        await tabs.getByRole("tab", { name: "Session", exact: true }).click()
++        await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(finalOffset, 0)
++
++        for (const name of ["Files", "Terminal"]) {
++          await tabs.getByRole("tab", { name, exact: true }).click()
++          await expect(scroller).toBeHidden()
++          await tabs.getByRole("tab", { name: "Session", exact: true }).click()
++          await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(finalOffset, 0)
++        }
++      })
++    }
+ 
+     test("reversing a touch drag stops following streamed output", async ({ page }, testInfo) => {
+       const partID = "prt_mobile_stream"
 --- a/packages/app/src/shell/titlebar/tab-strip.tsx
 +++ b/packages/app/src/shell/titlebar/tab-strip.tsx
 @@ -302,6 +302,10 @@
@@ -1870,7 +1994,7 @@
      .getByRole("button", { name: "Session details", exact: true })
 --- a/packages/app/src/session/screen.tsx
 +++ b/packages/app/src/session/screen.tsx
-@@ -198,6 +198,40 @@
+@@ -198,6 +198,43 @@
    })
  
    const conversationVisible = createMemo(() => isDesktop() || mobileView() === "session")
@@ -1880,6 +2004,7 @@
 +  createEffect(() => {
 +    const viewport = window.visualViewport
 +    const root = document.getElementById("root")
++
 +    const ios =
 +      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
 +      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
@@ -1888,10 +2013,12 @@
 +
 +    const height = root.style.height
 +    const transform = root.style.transform
++
 +    const restore = () => {
 +      root.style.height = height
 +      root.style.transform = transform
 +    }
++
 +    const sync = () => {
 +      if (viewport.scale !== 1 || window.innerHeight - viewport.height < 100) return restore()
 +
