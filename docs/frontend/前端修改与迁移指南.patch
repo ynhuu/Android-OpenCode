@@ -2,22 +2,1059 @@
 +++ b/packages/app/.env.production
 @@ -0,0 +1 @@
 +VITE_OPENCODE_SERVER_MODE=none
---- a/packages/app/src/workspaces/selection/dialog.tsx
-+++ b/packages/app/src/workspaces/selection/dialog.tsx
-@@ -292,6 +292,13 @@
-         }
-         button[data-type="item"]:hover {
-           background: var(--v2-overlay-simple-overlay-hover) !important;
+--- a/packages/app/e2e/regression/home.spec.ts
++++ b/packages/app/e2e/regression/home.spec.ts
+@@ -109,6 +109,131 @@
+   await openHome(page)
+   await expectAppVisible(row(page, fixture.expected.sourceTitle))
+   location.release()
++})
++
++test.describe("touch Home session actions", () => {
++  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } })
++
++  test.beforeEach(async ({ page }) => {
++    await page.addInitScript(() => Object.defineProperty(navigator, "standalone", { value: true }))
++  })
++
++  for (const opening of ["timer", "native"] as const) {
++    test(`${opening} long press survives release, then accepts a real outside pointer`, async ({ page }) => {
++      await openHome(page)
++      const target = row(page, fixture.expected.targetTitle)
++      await expect(target).toBeVisible()
++      await page.clock.install()
++      await page.clock.pauseAt(new Date())
++      await target.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 1, button: 0 })
++
++      if (opening === "timer") await page.clock.runFor(500)
++
++      if (opening === "native") {
++        await target.dispatchEvent("pointercancel", { pointerType: "touch", pointerId: 1 })
++        await target.evaluate((element) =>
++          element.dispatchEvent(new TouchEvent("touchcancel", { bubbles: true, cancelable: true })),
++        )
++        await target.dispatchEvent("contextmenu", { clientX: 48, clientY: 120 })
++      }
++
++      const rename = page.getByRole("menuitem", { name: "Rename", exact: true })
++      await expect(rename).toBeVisible()
++      await page.clock.runFor(1)
++      await target.dispatchEvent("pointercancel", { pointerType: "touch", pointerId: 1 })
++      await page.evaluate(() =>
++        document.body.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true })),
++      )
++      await target.dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 })
++      await target.dispatchEvent("click", { detail: 1, button: 0 })
++      await page.evaluate(() => document.body.dispatchEvent(new FocusEvent("focusin", { bubbles: true })))
++      await expect(rename).toBeVisible()
++      await expect(page).toHaveURL("/")
++      await page.evaluate(() =>
++        document.body.dispatchEvent(
++          new PointerEvent("pointerdown", {
++            bubbles: true,
++            pointerType: "mouse",
++            button: 0,
++          }),
++        ),
++      )
++      await page.clock.resume()
++      await expect(rename).toBeHidden()
++      await target.tap()
++      await expect(page).toHaveURL(new RegExp(`/session/${fixture.targetID}$`))
++    })
++  }
++
++  test("release protection expires without trapping later focus", async ({ page }) => {
++    await openHome(page)
++    await page.clock.install()
++    const target = row(page, fixture.expected.targetTitle)
++    await expect(target).toBeVisible()
++    await target.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 1, button: 0 })
++    await target.dispatchEvent("contextmenu", { clientX: 48, clientY: 120 })
++    const rename = page.getByRole("menuitem", { name: "Rename", exact: true })
++    await expect(rename).toBeVisible()
++    await page.evaluate(() =>
++      document.body.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true })),
++    )
++    await page.clock.runFor(800)
++    await page.evaluate(() => document.body.dispatchEvent(new FocusEvent("focusin", { bubbles: true })))
++    await expect(rename).toBeHidden()
++  })
++
++  test("touch rename waits for release click and keeps the editor focused", async ({ page }) => {
++    await openHome(page)
++    const target = row(page, fixture.expected.targetTitle)
++    await target.click({ button: "right" })
++    const rename = page.getByRole("menuitem", { name: "Rename", exact: true })
++    await rename.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 2, button: 0 })
++    await rename.dispatchEvent("pointerup", { pointerType: "touch", pointerId: 2, button: 0 })
++    const input = page.locator('[data-component="home-session-rename"]')
++    // Opening on pointerup leaves the input exposed to the subsequent release click.
++    await expect(input).toHaveCount(0)
++    await rename.dispatchEvent("click", { detail: 1, button: 0 })
++    await expect(input).toBeFocused()
++    await expect(input).toHaveValue(fixture.expected.targetTitle)
++    await input.fill("Touch renamed")
++
++    const saved = page.waitForRequest(
++      (request) =>
++        request.method() === "PATCH" && new URL(request.url()).pathname.endsWith(`/session/${fixture.targetID}`),
++    )
++
++    await input.press("Enter")
++    expect((await saved).postDataJSON()).toEqual({ title: "Touch renamed" })
++    await expect(row(page, "Touch renamed")).toBeVisible()
++    await row(page, "Touch renamed").click({ button: "right" })
++    await page.getByRole("menuitem", { name: "Rename", exact: true }).tap()
++    await expect(input).toBeFocused()
++    await input.press("Escape")
++    await expect(input).toBeHidden()
++    await expect(row(page, "Touch renamed")).toBeFocused()
++    await row(page, "Touch renamed").click({ button: "right" })
++    await page.getByRole("menuitem", { name: "Rename", exact: true }).tap()
++    await input.fill("Cancelled draft")
++    await page.getByRole("textbox", { name: "Search sessions" }).tap()
++    await expect(input).toBeHidden()
++    await expect(row(page, "Touch renamed")).toBeVisible()
++  })
++
++  test("touch delete waits for release click and keeps the confirmation open", async ({ page }) => {
++    await openHome(page)
++    const target = row(page, fixture.expected.targetTitle)
++    await target.click({ button: "right" })
++    const remove = page.getByRole("menuitem", { name: "Delete…" })
++    await remove.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 2, button: 0 })
++    await remove.dispatchEvent("pointerup", { pointerType: "touch", pointerId: 2, button: 0 })
++    const dialog = page.getByRole("dialog")
++    await expect(dialog).toHaveCount(0)
++    await remove.dispatchEvent("click", { detail: 1, button: 0 })
++    await expect(dialog).toContainText(`Delete session "${fixture.expected.targetTitle}"?`)
++    await dialog.getByRole("button", { name: "Cancel", exact: true }).tap()
++    await expect(dialog).toBeHidden()
++    await expect(target).toBeVisible()
++  })
+ })
+ 
+ test("Home and the directory picker load without newer browser APIs", async ({ page }) => {
+--- a/packages/app/e2e/regression/mobile-extension-drawers.spec.ts
++++ b/packages/app/e2e/regression/mobile-extension-drawers.spec.ts
+@@ -18,7 +18,11 @@
+       })
+       await openWithDirection(page, sessionHref(fixture.targetID), direction)
+       const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
+-      const more = tabs.getByRole("tab", { name: "More...", exact: true })
++
++      const more = page
++        .locator('[data-slot="session-mobile-view-navigation"]')
++        .getByRole("button", { name: "More options", exact: true })
++
+       await expect(tabs.getByRole("tab", { selected: true })).toHaveText("Session")
+       await more.click()
+       await page
+@@ -152,7 +156,10 @@
+   await openWithDirection(page, sessionHref(fixture.targetID), "ltr")
+   const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
+   await expect(tabs.getByRole("tab", { selected: true })).toHaveText("Session")
+-  await tabs.getByRole("tab", { name: "More...", exact: true }).click()
++  await page
++    .locator('[data-slot="session-mobile-view-navigation"]')
++    .getByRole("button", { name: "More options", exact: true })
++    .click()
+   await page
+     .getByRole("dialog", { name: "More options", exact: true })
+     .getByRole("button", { name: "Session details", exact: true })
+--- a/packages/app/e2e/regression/mobile-extensions.spec.ts
++++ b/packages/app/e2e/regression/mobile-extensions.spec.ts
+@@ -3,23 +3,35 @@
+ import { fixture, mockStressTimeline } from "../utils/session-fixture"
+ import { fileNode } from "../utils/workspace"
+ 
+-test.use({ viewport: { width: 390, height: 844 } })
++test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
+ 
+ async function openFiles(page: Page) {
+   await page
+     .getByRole("tablist", { name: "Session view", exact: true })
+-    .getByRole("tab", { name: "More...", exact: true })
+-    .click()
+-  await page
+-    .getByRole("dialog", { name: "More options", exact: true })
+-    .getByRole("button", { name: "Files", exact: true })
++    .getByRole("tab", { name: "Files", exact: true })
+     .click()
+ }
+ 
+ test("mobile files browse, comment, search, and close tabs", async ({ page }) => {
++  const listing = ["first.ts", "second.ts"]
++  const nested = ["src/before.ts"]
++  const contentRequests: string[] = []
++  const contents = new Map<string, string>()
+   await mockStressTimeline(page, {
+-    fileList: (path) => (path ? [] : ["first.ts", "second.ts"].map((name) => fileNode(fixture.directory, name))),
+-    fileContent: (path) => `contents:${path}`,
++    fileList: (path) =>
++      path === "src"
++        ? nested.map((name) => fileNode(fixture.directory, name))
++        : path
++          ? []
++          : [
++              ...listing.map((name) => fileNode(fixture.directory, name)),
++              fileNode(fixture.directory, "src", "directory"),
++            ],
++    fileContent: (path) => {
++      contentRequests.push(path)
++
++      return contents.get(path) ?? `contents:${path}`
++    },
+     findFiles: ({ query }) =>
+       ["first.ts", "second.ts"].flatMap((path) => (path.includes(query) ? [fileNode(fixture.directory, path)] : [])),
+   })
+@@ -27,6 +39,8 @@
+   const navigation = page.getByRole("tablist", { name: "Session view", exact: true })
+   await openFiles(page)
+   const files = page.locator('[data-slot="session-mobile-files"]')
++  await files.getByRole("button", { name: "src", exact: true }).click()
++  await expect(files.getByRole("button", { name: "before.ts", exact: true })).toBeEnabled()
+   await files.getByRole("button", { name: "first.ts", exact: true }).click()
+   await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
+   await files.locator('[data-column-number="1"]').click()
+@@ -61,21 +75,42 @@
+     .click()
+   await expect(session).toHaveAttribute("aria-selected", "true")
+   await expect(page.getByRole("textbox", { name: "Prompt", exact: true })).toBeVisible()
++  listing.push("automatic.ts")
++  nested.splice(0, 1, "src/after.ts")
++  const requestsBeforeReturn = contentRequests.length
+   await openFiles(page)
+   await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
+   const filter = files.getByRole("combobox", { name: "Filter files", exact: true })
+   await expect(filter).toBeHidden()
+   await files.getByRole("button", { name: "All files", exact: true }).click()
++  await expect(files.getByRole("button", { name: "second.ts", exact: true })).toBeEnabled()
++  await expect(files.getByRole("button", { name: "automatic.ts", exact: true })).toBeEnabled()
++  await expect(files.getByRole("button", { name: "after.ts", exact: true })).toBeEnabled()
++  await expect(files.getByRole("button", { name: "before.ts", exact: true })).toHaveCount(0)
++  expect(contentRequests).toHaveLength(requestsBeforeReturn)
++  await expect(files.getByRole("button", { name: "Refresh files", exact: true })).toHaveCount(0)
++  await session.click()
++  listing.push("refreshed.ts")
++  await openFiles(page)
++  await files.getByRole("button", { name: "All files", exact: true }).click()
++  await expect(files.getByRole("button", { name: "refreshed.ts", exact: true })).toBeEnabled()
+   await filter.fill("second")
+   await files.getByRole("option", { name: "second.ts", exact: true }).click()
+   await expect(files.getByText("contents:second.ts", { exact: true })).toBeVisible()
+   const openTabs = files.getByRole("tablist", { name: "Open files", exact: true })
+   await expect(openTabs.getByRole("tab")).toHaveText(["first.ts", "second.ts"])
++  contents.set("first.ts", "reopened:first.ts")
++  const requestsBeforeSwitch = contentRequests.length
+   await openTabs.getByRole("tab", { name: "first.ts", exact: true }).click()
+   await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
++  expect(contentRequests).toHaveLength(requestsBeforeSwitch)
+   await navigation.getByRole("tab", { name: "Session", exact: true }).click()
+   await openFiles(page)
+   await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
++  await files.getByRole("button", { name: "All files", exact: true }).click()
++  await filter.fill("")
++  await files.getByRole("button", { name: "first.ts", exact: true }).click()
++  await expect(files.getByText("reopened:first.ts", { exact: true })).toBeVisible()
+   await files
+     .locator('[data-slot="tabs-v2-trigger-wrapper"]')
+     .filter({ has: page.getByRole("tab", { name: "first.ts", exact: true }) })
+@@ -250,7 +285,7 @@
+   for (const file of ["added.ts", "modified.ts", "added.ts", "modified.ts"]) {
+     await navigation.getByRole("tab", { name: "Changes", exact: true }).click()
+     await review.locator(`[data-file="${file}"]`).getByRole("button", { name: "Open file", exact: true }).click()
+-    await expect(navigation.getByRole("tab", { name: "More...", exact: true })).toHaveAttribute("aria-selected", "true")
++    await expect(navigation.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true")
+     await expect(selected).toHaveText([file])
+     await expect(files).toHaveAttribute("data-browsing", "false")
+ 
+@@ -264,8 +299,8 @@
+   await page.goto(sessionHref(fixture.targetID))
+ 
+   const more = page
+-    .getByRole("tablist", { name: "Session view", exact: true })
+-    .getByRole("tab", { name: "More...", exact: true })
++    .locator('[data-slot="session-mobile-view-navigation"]')
++    .getByRole("button", { name: "More options", exact: true })
+ 
+   const drawer = page.getByRole("dialog", { name: "Session details", exact: true })
+   const overlay = page.locator('[data-slot="mobile-drawer-overlay"]')
+--- a/packages/app/e2e/regression/mobile-session-options.spec.ts
++++ b/packages/app/e2e/regression/mobile-session-options.spec.ts
+@@ -7,14 +7,24 @@
+   for (const direction of ["ltr", "rtl"] as const) {
+     test(`mobile session options are compact and readable in ${scheme} ${direction}`, async ({ page }, testInfo) => {
+       await page.setViewportSize({ width: 390, height: 844 })
+-      await mockStressTimeline(page)
++      await mockStressTimeline(page, { fileList: () => [] })
+       await page.addInitScript((scheme) => {
+         localStorage.setItem("opencode-color-scheme", scheme)
+         localStorage.setItem("settings.v3", JSON.stringify({ general: { mobileTitlebarPosition: "bottom" } }))
+       }, scheme)
+       await openWithDirection(page, sessionHref(fixture.targetID), direction)
+       const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
+-      const more = tabs.getByRole("tab", { name: "More...", exact: true })
++
++      const more = page
++        .locator('[data-slot="session-mobile-view-navigation"]')
++        .getByRole("button", { name: "More options", exact: true })
++
++      await expect(tabs.getByRole("tab")).toHaveText(["Session", "Changes", "Files", "Terminal"])
++      await expect(more).toHaveText("…")
++      await expect(more).toHaveCSS("width", "32px")
++      await tabs.getByRole("tab", { name: "Files", exact: true }).click()
++      await expect(tabs.getByRole("tab", { selected: true })).toHaveText("Files")
++      await tabs.getByRole("tab", { name: "Session", exact: true }).click()
+       await expect(tabs.getByRole("tab", { selected: true })).toHaveText("Session")
+       await more.click()
+       const drawer = page.getByRole("dialog", { name: "More options", exact: true })
+@@ -36,7 +46,11 @@
+       await drawer.screenshot({ path: testInfo.outputPath("options.png") })
+       await testInfo.attach("options", { path: testInfo.outputPath("options.png"), contentType: "image/png" })
+ 
+-      for (const name of ["Files", "Terminal", "Usage", "Session details"]) {
++      for (const name of ["Files", "Terminal"]) {
++        await expect(drawer.getByRole("button", { name, exact: true })).toHaveCount(0)
++      }
++
++      for (const name of ["Usage", "Session details"]) {
+         const option = drawer.getByRole("button", { name, exact: true })
+         await expect(option).toHaveCSS("height", "44px")
+         await expect
+--- a/packages/app/e2e/regression/mobile-session.spec.ts
++++ b/packages/app/e2e/regression/mobile-session.spec.ts
+@@ -28,7 +28,7 @@
+ 
+     const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
+     const navigation = page.locator('[data-slot="session-mobile-view-navigation"]')
+-    const more = tabs.getByRole("tab", { name: "More...", exact: true })
++    const more = navigation.getByRole("button", { name: "More options", exact: true })
+     const views = page.getByRole("dialog", { name: "More options", exact: true })
+     const picker = tabs.getByRole("tab", { selected: true })
+ 
+@@ -41,7 +41,7 @@
+     await expect(navigation).toHaveCount(1)
+     await expect(message).toBeVisible()
+     await expect(composer).toBeVisible()
+-    await expect(tabs.getByRole("tab")).toHaveText(["Session", "Changes", "More..."])
++    await expect(tabs.getByRole("tab")).toHaveText(["Session", "Changes", "Files", "Terminal"])
+     await expect(tabs).toHaveCSS("padding-left", "0px")
+     await expect(tabs).toHaveCSS("padding-right", "0px")
+ 
+@@ -93,7 +93,7 @@
+     await expect(views).toBeVisible()
+     await expect(more).toHaveAttribute("aria-expanded", "true")
+ 
+-    for (const name of ["Files", "Terminal", "Usage", "Session details"])
++    for (const name of ["Usage", "Session details"])
+       await expect(views.getByRole("button", { name, exact: true })).toBeVisible()
+     await expect(views).not.toHaveAttribute("data-transitioning")
+     await page.keyboard.press("Escape")
+@@ -104,7 +104,8 @@
+     await more.press("Enter")
+     await views.getByRole("button", { name: "Usage", exact: true }).click()
+     await expect(views).toBeHidden()
+-    await expect(picker).toHaveText("More...")
++    await expect(picker).toHaveCount(0)
++    await expect(more).toHaveAttribute("aria-pressed", "true")
+     await expect(page.getByText("Total Cost", { exact: true })).toBeVisible()
+     const usage = page.locator('[data-slot="session-usage-content"]')
+     await expect(usage).toHaveCSS("padding-top", "16px")
+@@ -153,17 +154,13 @@
+     await expect(picker).toHaveText("Changes")
+     await expect(page.getByText("No uncommitted changes yet", { exact: true })).toBeVisible()
+ 
+-    await more.click()
+-    await views.getByRole("button", { name: "Files", exact: true }).click()
+-    await expect(views).toBeHidden()
+-    await expect(picker).toHaveText("More...")
++    await tabs.getByRole("tab", { name: "Files", exact: true }).click()
++    await expect(picker).toHaveText("Files")
+     await expect(page.getByRole("combobox", { name: "Filter files", exact: true })).toBeVisible()
+     await expect(composer).toBeHidden()
+ 
+-    await more.click()
+-    await expect(views.getByRole("button", { name: "Files", exact: true })).toHaveAttribute("aria-pressed", "true")
+-    await views.getByRole("button", { name: "Terminal", exact: true }).click()
+-    await expect(views).toBeHidden()
++    await tabs.getByRole("tab", { name: "Terminal", exact: true }).click()
++    await expect(picker).toHaveText("Terminal")
+     const panel = page.locator("#terminal-panel")
+     await expect(panel).toHaveAttribute("data-opened", "true")
+     await expect(panel.getByRole("tab", { name: /Terminal 1/ })).toBeVisible()
+@@ -180,14 +177,14 @@
+     await expect(panel).toHaveAttribute("data-cache-probe", "original")
+ 
+     await page.keyboard.press("Control+Backquote")
+-    await expect(picker).toHaveText("More...")
++    await expect(picker).toHaveText("Terminal")
+     await expect(panel).toBeVisible()
+     await expect(panel).toHaveAttribute("data-cache-probe", "original")
+     await page.keyboard.press("Control+Backquote")
+     await expect(picker).toHaveText("Session")
+ 
+     await page.keyboard.press("Control+Backquote")
+-    await expect(picker).toHaveText("More...")
++    await expect(picker).toHaveText("Terminal")
+     await panel.getByRole("button", { name: "Close terminal", exact: true }).click()
+     await expect(picker).toHaveText("Session")
+     await expect(panel).toBeHidden()
+@@ -212,16 +209,14 @@
+     await expect(page.getByText("Total Cost", { exact: true })).toBeVisible()
+     await openTab(fixture.expected.sourceTitle)
+     await expect(picker).toHaveText("Session")
+-    await more.click()
+-    await views.getByRole("button", { name: "Files", exact: true }).click()
+-    await expect(picker).toHaveText("More...")
++    await tabs.getByRole("tab", { name: "Files", exact: true }).click()
++    await expect(picker).toHaveText("Files")
+     await openTab(fixture.expected.targetTitle)
+     await expect(picker).toHaveText("Session")
+     await openTab(fixture.expected.sourceTitle)
+     await expect(picker).toHaveText("Session")
+-    await more.click()
+-    await views.getByRole("button", { name: "Files", exact: true }).click()
+-    await expect(picker).toHaveText("More...")
++    await tabs.getByRole("tab", { name: "Files", exact: true }).click()
++    await expect(picker).toHaveText("Files")
+     await openTabs()
+     await drawer.getByRole("button", { name: "Home", exact: true }).click()
+     await expect(page).toHaveURL("/")
+@@ -256,15 +251,18 @@
+   await page.setViewportSize({ width: 390, height: 844 })
+   const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
+   const details = page.getByRole("dialog", { name: "Session details", exact: true })
+-  const more = tabs.getByRole("tab", { name: "More...", exact: true })
++
++  const more = page
++    .locator('[data-slot="session-mobile-view-navigation"]')
++    .getByRole("button", { name: "More options", exact: true })
++
+   const views = page.getByRole("dialog", { name: "More options", exact: true })
+   await more.click()
+   await views.getByRole("button", { name: "Session details", exact: true }).click()
+   await details.getByRole("button", { name: "No changes", exact: true }).click()
+   await expect(details).toBeHidden()
+   await expect(tabs.getByRole("tab", { selected: true })).toHaveText("Changes")
+-  await more.click()
+-  await views.getByRole("button", { name: "Files", exact: true }).click()
++  await tabs.getByRole("tab", { name: "Files", exact: true }).click()
+   await expect(
+     page.getByRole("tablist", { name: "Open files", exact: true }).getByRole("tab", { name: "README.md", exact: true }),
+   ).toHaveAttribute("aria-selected", "true")
+@@ -280,8 +278,7 @@
+   await page.reload()
+   await expect(launcher).toHaveAttribute("aria-selected", "true")
+   await page.setViewportSize({ width: 390, height: 844 })
+-  await more.click()
+-  await views.getByRole("button", { name: "Files", exact: true }).click()
++  await tabs.getByRole("tab", { name: "Files", exact: true }).click()
+   const files = page.locator('[data-slot="session-mobile-files"]')
+   await files.getByRole("button", { name: "README.md", exact: true }).click()
+   await expect(files.getByText("contents:README.md", { exact: true })).toBeVisible()
+@@ -305,17 +302,14 @@
+ 
+   const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
+   const terminal = page.locator("#terminal-panel")
+-  const views = page.getByRole("dialog", { name: "More options", exact: true })
+-  await tabs.getByRole("tab", { name: "More...", exact: true }).click()
+-  await views.getByRole("button", { name: "Terminal", exact: true }).click()
+-  await expect(views).toBeHidden()
++  await tabs.getByRole("tab", { name: "Terminal", exact: true }).click()
+   await expect(terminal.locator("textarea")).toBeEditable()
+   await page.keyboard.press("ControlOrMeta+p")
+   const dialog = page.getByRole("dialog")
+   await dialog.getByRole("textbox").fill("README")
+   await dialog.getByRole("option", { name: "/ README.md", exact: true }).click()
+   await expect(dialog).toHaveCount(0)
+-  await expect(tabs.getByRole("tab", { selected: true })).toHaveText("More...")
++  await expect(tabs.getByRole("tab", { selected: true })).toHaveText("Terminal")
+   await expect(terminal).toHaveAttribute("data-opened", "true")
+ 
+   await page.setViewportSize({ width: 1280, height: 900 })
+--- a/packages/app/e2e/regression/mobile-timeline-scroll.spec.ts
++++ b/packages/app/e2e/regression/mobile-timeline-scroll.spec.ts
+@@ -17,6 +17,66 @@
+ // scrollport. Disable it so the visual assertion measures the supplied gesture.
+ test.use({ colorScheme: "light", launchOptions: { args: ["--disable-features=ResamplingScrollEvents"] } })
+ 
++test.describe("keyboard viewport", () => {
++  test.use({
++    isMobile: true,
++    hasTouch: true,
++    userAgent: devices["Pixel 7"].userAgent,
++    viewport: { width: 390, height: 844 },
++  })
++
++  for (const following of [true, false]) {
++    test(`viewport shrink ${following ? "keeps latest messages above the composer" : "preserves history reading position"}`, async ({
++      page,
++    }) => {
++      const content = Array.from({ length: 60 }, (_, index) => `Keyboard viewport message ${index}.`).join("\n\n")
++      await setupTimeline(page, {
++        messages: [userMessage(), assistantMessage([textPart("prt_keyboard_viewport", content)])],
++        viewport: { width: 390, height: 844 },
++      })
++
++      const scroller = page
++        .locator('[data-slot="session-timeline-scroll"]')
++        .getByRole("region", { name: "scrollable content", exact: true })
++
++      const distance = () =>
++        scroller.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)
++
++      await expect(page.getByText("Keyboard viewport message 59.", { exact: true })).toBeInViewport()
++      await expect.poll(distance).toBeLessThanOrEqual(2)
++      await page.getByRole("textbox", { name: "Prompt", exact: true }).focus()
++
++      if (!following) {
++        await scroller.press("PageUp")
++        await expect.poll(distance).toBeGreaterThan(200)
++        await page.getByRole("textbox", { name: "Prompt", exact: true }).focus()
++      }
++
++      const before = await scroller.evaluate((element) => ({ height: element.clientHeight, top: element.scrollTop }))
++      // Android's resizes-content keyboard shrinks the layout viewport without changing its width.
++      await page.setViewportSize({ width: 390, height: 500 })
++      await expect.poll(() => scroller.evaluate((element) => element.clientHeight)).toBeLessThan(before.height)
++
++      if (following) {
++        await expect.poll(distance).toBeLessThanOrEqual(2)
++        await expect(page.getByText("Keyboard viewport message 59.", { exact: true })).toBeInViewport()
++      }
++
++      if (!following) {
++        await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(before.top, 0)
++      }
++
++      await page.setViewportSize({ width: 390, height: 844 })
++      await expect.poll(() => scroller.evaluate((element) => element.clientHeight)).toBe(before.height)
++
++      if (following) await expect.poll(distance).toBeLessThanOrEqual(2)
++
++      if (!following)
++        await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(before.top, 0)
++    })
++  }
++})
++
+ for (const device of ["Pixel 7", "iPhone 13"]) {
+   test.describe(device, () => {
+     // Chromium drives native touch input, including the virtualizer's iOS user-agent path.
+@@ -26,6 +86,57 @@
+       userAgent: devices[device].userAgent,
+       viewport: { width: 390, height: 844 },
+     })
++
++    if (device === "iPhone 13") {
++      test("returning from another view preserves history reading position", async ({ page }) => {
++        const content = Array.from({ length: 100 }, (_, index) => `View switch message ${index}.`).join("\n\n")
++        await setupTimeline(page, {
++          messages: [userMessage(), assistantMessage([textPart("prt_view_switch", content)])],
++          viewport: { width: 390, height: 844 },
++          fileList: () => [],
++          pty: {},
++        })
++
++        const scroller = page
++          .locator('[data-slot="session-timeline-scroll"]')
++          .getByRole("region", { name: "scrollable content", exact: true })
++
++        await expect(page.getByText("View switch message 99.", { exact: true })).toBeInViewport()
++        await scroller.press("PageUp")
++        await scroller.press("PageUp")
++        const before = await scroller.evaluate((element) => element.scrollTop)
++        const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
++        await tabs.getByRole("tab", { name: "Changes", exact: true }).click()
++        await tabs.getByRole("tab", { name: "Session", exact: true }).click()
++        await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(before, 0)
++
++        // Leave in the same task as a native offset change, before its scroll event.
++        const finalOffset = await scroller.evaluate((element) => {
++          element.scrollTop = Math.max(0, element.scrollTop - 150)
++          const top = element.scrollTop
++          const tabs = document.querySelector('[data-slot="session-mobile-view-tabs"]')!
++
++          const changes = Array.from(tabs.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
++            (button) => button.textContent?.trim() === "Changes",
++          )!
++
++          changes.click()
++
++          return top
++        })
++
++        await tabs.getByRole("tab", { name: "Changes", exact: true }).click()
++        await tabs.getByRole("tab", { name: "Session", exact: true }).click()
++        await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(finalOffset, 0)
++
++        for (const name of ["Files", "Terminal"]) {
++          await tabs.getByRole("tab", { name, exact: true }).click()
++          await expect(scroller).toBeHidden()
++          await tabs.getByRole("tab", { name: "Session", exact: true }).click()
++          await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(finalOffset, 0)
 +        }
-+        @media (hover: none) {
-+          button[data-type="item"]:hover:not([data-item-selected="true"]),
-+          button[data-type="item"][data-item-context-hover="true"]:not([data-item-selected="true"]) {
-+            background: transparent !important;
-+            --truncate-marker-background-overlay-color: transparent !important;
-+          }
-         }
-         button[data-type="item"]:focus-visible {
-           outline: none !important;
++      })
++    }
+ 
+     test("reversing a touch drag stops following streamed output", async ({ page }, testInfo) => {
+       const partID = "prt_mobile_stream"
+--- a/packages/app/e2e/regression/side-panels.spec.ts
++++ b/packages/app/e2e/regression/side-panels.spec.ts
+@@ -1,7 +1,42 @@
+ import { expect, test, type Locator, type Page } from "@playwright/test"
+ import { tabKey } from "../utils/app"
+-import { fileDiff, openSession } from "../utils/workspace"
++import { fileDiff, fileNode, openSession } from "../utils/workspace"
+ import { expectSessionTitle } from "../utils/waits"
++
++test("returning to files refreshes listings; reopening a file rereads content but switching tabs uses cache", async ({
++  page,
++}) => {
++  await page.setViewportSize({ width: 1440, height: 900 })
++  const directory = "C:/OpenCode/FileReturn"
++  const listing = ["first.ts"]
++  const contentRequests: string[] = []
++  const contents = new Map<string, string>()
++  await openSession(page, {
++    name: "FileReturn",
++    fileList: (path) => (path ? [] : listing.map((name) => fileNode(directory, name))),
++    fileContent: (path) => {
++      contentRequests.push(path)
++
++      return { type: "text", content: contents.get(path) ?? `contents:${path}` }
++    },
++    seed: { panes: { ses_filereturn: { review: true } } },
++  })
++  const panel = page.locator("#review-panel")
++  await panel.getByRole("button", { name: "Open file", exact: true }).click()
++  await panel.getByRole("button", { name: "first.ts", exact: true }).click()
++  await expect(panel.getByText("contents:first.ts", { exact: true })).toBeVisible()
++  await panel.getByRole("tab", { name: "Review", exact: true }).click()
++  listing.push("automatic.ts")
++  contents.set("first.ts", "reopened:first.ts")
++  const requestsBeforeReturn = contentRequests.length
++  await panel.getByRole("tab", { name: "first.ts", exact: true }).click()
++  await expect(panel.getByRole("button", { name: "automatic.ts", exact: true })).toBeEnabled()
++  await expect(panel.getByText("contents:first.ts", { exact: true })).toBeVisible()
++  expect(contentRequests).toHaveLength(requestsBeforeReturn)
++  await panel.getByRole("button", { name: "Open file", exact: true }).click()
++  await panel.getByRole("button", { name: "first.ts", exact: true }).click()
++  await expect(panel.getByText("reopened:first.ts", { exact: true })).toBeVisible()
++})
+ 
+ test("review and terminal follow the session tab and stay mounted", async ({ page }) => {
+   await page.setViewportSize({ width: 1440, height: 900 })
+@@ -321,6 +356,7 @@
+ // Pauses each CSS transition as it starts, so a real toggle can be measured mid-motion.
+ function holdTransitions(page: Page) {
+   return page.evaluate(() => {
++    // SAFETY: this helper is the only writer of the optional e2eHold property and always uses this shape.
+     const host = window as Window & { e2eHold?: { active: boolean } }
+ 
+     if (!host.e2eHold) {
+@@ -341,7 +377,10 @@
+ 
+ function releaseTransitions(page: Page) {
+   return page.evaluate(() => {
+-    ;(window as Window & { e2eHold?: { active: boolean } }).e2eHold!.active = false
++    // SAFETY: holdTransitions creates this property before releaseTransitions is called.
++    const host = window as Window & { e2eHold?: { active: boolean } }
++
++    host.e2eHold!.active = false
+     document
+       .getAnimations()
+       .filter((item) => item instanceof CSSTransition && item.playState === "paused")
+@@ -359,7 +398,10 @@
+           (item) =>
+             item instanceof CSSTransition && item.playState === "paused" && item.transitionProperty === "height",
+         )
+-        .map((item) => ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot")),
++        .map((item) => {
++          // SAFETY: CSS transitions use KeyframeEffect and these height transitions target DOM elements.
++          return ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot")
++        }),
+     )
+ 
+   if (progress !== undefined) {
+@@ -371,9 +413,10 @@
+       .getAnimations()
+       .filter((item): item is CSSTransition => item instanceof CSSTransition && item.playState === "paused")
+ 
+-    const region = transitions.find(
+-      (item) => ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot") === "session-side-region",
+-    )
++    const region = transitions.find((item) => {
++      // SAFETY: CSS transitions use KeyframeEffect and these paused transitions target DOM elements.
++      return ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot") === "session-side-region"
++    })
+ 
+     if (progress !== undefined) {
+       const time = Number(region!.effect!.getTiming().duration) * progress
+@@ -388,7 +431,10 @@
+     const content = box('[data-slot="terminal-panel-content"]')!
+ 
+     return {
+-      moving: transitions.map((item) => ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot")),
++      moving: transitions.map((item) => {
++        // SAFETY: CSS transitions use KeyframeEffect and these paused transitions target DOM elements.
++        return ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot")
++      }),
+       terminalRegion: terminalRegion.height,
+       terminalBottom: terminal.bottom,
+       anchor: Math.abs(terminal.top - content.top),
+@@ -414,6 +460,7 @@
+       const centers = await Promise.all(
+         [terminal.getByRole("button", { name: "New terminal", exact: true }), toggle].map((button) =>
+           button.locator("svg").evaluate((element) => {
++            // SAFETY: the locator selects the button's root SVG element, which exposes getBBox and getScreenCTM.
+             const svg = element as SVGSVGElement
+             const path = svg.getBBox()
+ 
+--- a/packages/app/e2e/regression/tabs.spec.ts
++++ b/packages/app/e2e/regression/tabs.spec.ts
+@@ -134,6 +134,102 @@
+     await expect(page.locator('[data-slot="titlebar-tabs"]')).toHaveCount(0)
+   })
+ }
++
++test.describe("mobile tab touch gestures", () => {
++  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 720 } })
++
++  test("swiping scrolls without reordering, while holding enables reordering", async ({ page }) => {
++    await page.clock.install()
++    const directory = "C:/OpenCode/Tabs"
++    await mockWorkspace(page, {
++      name: "Tabs",
++      sessions: [a, b],
++      seed: {
++        tabs: [a.id, b.id, ...Array.from({ length: 24 }, (_, index) => ({ draft: `draft_touch_${index}`, directory }))],
++      },
++    })
++    await page.goto(sessionHref(a.id))
++    await page.getByRole("button", { name: "Tabs", exact: true }).click()
++    const drawer = page.locator('[data-slot="mobile-tabs-drawer"]')
++    const slots = drawer.locator("[data-titlebar-tab-slot]")
++    const scroll = drawer.locator('[data-slot="vertical-tabs-scroll"]')
++    await expect(slots).toHaveCount(26)
++    const order = () => slots.evaluateAll((elements) => elements.map((element) => element.getAttribute("data-tab-key")))
++    const initialOrder = await order()
++    await expect
++      .poll(() => scroll.evaluate((element) => element.scrollHeight - element.clientHeight))
++      .toBeGreaterThan(0)
++    await expect
++      .poll(() => drawer.evaluate((element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).m42))
++      .toBe(0)
++    await expect(drawer).not.toHaveAttribute("data-transitioning")
++    // Simulate an outer modal scroll lock misclassifying an iOS standalone swipe.
++    await page.evaluate(() => {
++      document.documentElement.dataset.blockedTabMoves = "0"
++      document.addEventListener(
++        "touchmove",
++        (event) => {
++          document.documentElement.dataset.blockedTabMoves = String(
++            Number(document.documentElement.dataset.blockedTabMoves) + 1,
++          )
++          event.preventDefault()
++        },
++        { passive: false },
++      )
++    })
++
++    const client = await page.context().newCDPSession(page)
++
++    const touch = (type: "touchStart" | "touchMove" | "touchEnd", x = 0, y = 0) =>
++      client.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y }] })
++
++    await slots.nth(3).scrollIntoViewIfNeeded()
++    const box = await slots.nth(3).boundingBox()
++
++    if (!box) throw new Error("tab has no bounding box")
++    const x = box.x + box.width / 2
++    const y = box.y + box.height / 2
++    await touch("touchStart", x, y)
++
++    for (let offset = 20; offset <= 120; offset += 20) await touch("touchMove", x, y - offset)
++    await touch("touchEnd")
++    await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
++    await expect(page.locator("html")).toHaveAttribute("data-blocked-tab-moves", "0")
++    // Wait beyond the hold threshold to catch a timer that was not canceled by the swipe.
++    await page.clock.runFor(450)
++    expect(await order()).toEqual(initialOrder)
++    await expectPath(page, sessionHref(a.id))
++
++    // Start the hold on a fresh drawer, without residual native swipe momentum.
++    await page.reload()
++    await page.getByRole("button", { name: "Tabs", exact: true }).click()
++    await expect(slots).toHaveCount(26)
++    await expect
++      .poll(() => drawer.evaluate((element) => new DOMMatrixReadOnly(getComputedStyle(element).transform).m42))
++      .toBe(0)
++    await expect(drawer).not.toHaveAttribute("data-transitioning")
++    await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBe(0)
++    await slots.first().scrollIntoViewIfNeeded()
++    const first = await slots.first().boundingBox()
++    const second = await slots.nth(1).boundingBox()
++
++    if (!first || !second) throw new Error("tabs have no bounding boxes")
++    const holdX = first.x + first.width / 2
++    const holdY = first.y + first.height / 2
++    await touch("touchStart", holdX, holdY)
++    // Hold past both the sorting threshold and the context menu's 700 ms timer.
++    await page.clock.runFor(900)
++    await expect(page.getByRole("menu")).toHaveCount(0)
++    await touch("touchMove", holdX, second.y + second.height / 2)
++    await expect.poll(order).not.toEqual(initialOrder)
++    await touch("touchEnd")
++    await expect.poll(order).toEqual([initialOrder[1], initialOrder[0], ...initialOrder.slice(2)])
++    await expectPath(page, sessionHref(a.id))
++    await client.detach()
++    await slots.first().locator("[data-titlebar-tab-link]").click({ button: "right" })
++    await expect(page.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible()
++  })
++})
+ 
+ test("vertical tabs resize, scroll, show shortcut hints, and navigate", async ({ page }) => {
+   await page.setViewportSize({ width: 1280, height: 480 })
+--- a/packages/app/e2e/regression/terminal-input.spec.ts
++++ b/packages/app/e2e/regression/terminal-input.spec.ts
+@@ -182,6 +182,234 @@
+   )
+ })
+ 
++test.describe("mobile terminal keys", () => {
++  test.use({
++    viewport: { width: 390, height: 844 },
++    hasTouch: true,
++    userAgent: "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36",
++  })
++
++  test("swipes through scrollback and routes full-screen swipes to the PTY", async ({ page }) => {
++    const { pty } = await openSession(page, workspace)
++    await page
++      .getByRole("tablist", { name: "Session view", exact: true })
++      .getByRole("tab", { name: "Terminal", exact: true })
++      .tap()
++    const terminal = page.locator('[data-component="terminal"]')
++    await expect(terminal.locator("textarea")).toHaveCount(1)
++    await expect.poll(() => pty.sockets.length).toBe(1)
++    pty.send("\x1b[?25l" + Array.from({ length: 200 }, (_, i) => `history-${i}\r\n`).join("") + "\x1b[6n")
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toMatch(/\x1b\[\d+;\d+R$/)
++    const ready = pty.sockets[0]!.input.join("")
++    await expect(terminal).toHaveCSS("opacity", "1")
++    const canvas = terminal.locator("canvas")
++    const textarea = terminal.locator("textarea")
++    await textarea.blur()
++    await expect(textarea).not.toBeFocused()
++    await canvas.screenshot()
++    // Compare the text area only, excluding Ghostty's fading scrollbar.
++
++    const image = () =>
++      canvas.evaluate((element) => {
++        if (!(element instanceof HTMLCanvasElement)) throw new Error("terminal canvas is missing")
++
++        const crop = document.createElement("canvas")
++        crop.width = element.width - 24 * devicePixelRatio
++        crop.height = element.height
++        crop.getContext("2d")!.drawImage(element, 0, 0)
++
++        return crop.toDataURL()
++      })
++
++    const bottom = await image()
++
++    const client = await page.context().newCDPSession(page)
++
++    const swipe = async (distance: number) => {
++      const box = await canvas.boundingBox()
++
++      if (!box) throw new Error("terminal canvas has no bounding box")
++      const x = box.x + box.width / 2
++      const y = box.y + box.height / 2
++      await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 1 }] })
++
++      // Native events exercise the real gesture path; small moves must accumulate.
++      for (let i = 1; i <= Math.abs(distance); i++) {
++        await client.send("Input.dispatchTouchEvent", {
++          type: "touchMove",
++          touchPoints: [{ x, y: y + Math.sign(distance) * i, id: 1 }],
++        })
++      }
++
++      await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
++    }
++
++    await swipe(132)
++    await expect.poll(image).not.toBe(bottom)
++    await expect(textarea).not.toBeFocused()
++    expect(pty.sockets[0]!.input.join("")).toBe(ready)
++    await swipe(-264)
++    await expect.poll(image).toBe(bottom)
++    await expect(textarea).not.toBeFocused()
++
++    pty.send("\x1b[?1049hfull-screen\x1b[6n")
++    // Cursor response proves the mode switch has been processed before the gesture.
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toMatch(/^\x1b\[\d+;\d+R\x1b\[\d+;\d+R$/)
++    const response = pty.sockets[0]!.input.join("")
++    await swipe(66)
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(response + "\x1b[A\x1b[A")
++    await swipe(-66)
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(response + "\x1b[A\x1b[A\x1b[B\x1b[B")
++    await expect(textarea).not.toBeFocused()
++    await canvas.tap()
++    await expect(textarea).toBeFocused()
++    await client.detach()
++  })
++
++  test("auxiliary keys preserve focus while Ctrl opens input and releases after one letter", async ({ page }) => {
++    const { pty } = await openSession(page, workspace)
++    await page
++      .getByRole("tablist", { name: "Session view", exact: true })
++      .getByRole("tab", { name: "Terminal", exact: true })
++      .tap()
++    const terminal = page.locator('[data-component="terminal"]')
++    await expect(terminal.locator("textarea")).toHaveCount(1)
++    await expect.poll(() => pty.sockets.length).toBe(1)
++    pty.send("ready")
++    await expect(terminal).toHaveCSS("opacity", "1")
++    await terminal.tap()
++    const keys = page.getByRole("group", { name: "Terminal keys", exact: true })
++    const ctrl = keys.getByRole("button", { name: "Ctrl", exact: true })
++    await expect(ctrl).toBeEnabled()
++    await expect(keys).toHaveCSS("scrollbar-width", "none")
++    await expect
++      .poll(() =>
++        keys.evaluate(
++          (element) =>
++            element.scrollWidth > element.clientWidth &&
++            new Set(Array.from(element.querySelectorAll("button"), (button) => button.offsetTop)).size === 1,
++        ),
++      )
++      .toBe(true)
++    const sent: string[] = []
++
++    for (const [label, input] of [
++      ["Esc", "\x1b"],
++      ["Tab", "\t"],
++      ["Up arrow", "\x1b[A"],
++      ["Down arrow", "\x1b[B"],
++      ["Left arrow", "\x1b[D"],
++      ["Right arrow", "\x1b[C"],
++      ["Ctrl+C", "\x03"],
++      ["Ctrl+D", "\x04"],
++      ["Ctrl+L", "\x0c"],
++      ["Home", "\x1b[H"],
++      ["Page Up", "\x1b[5~"],
++      ["Page Down", "\x1b[6~"],
++      ["End", "\x1b[F"],
++    ]) {
++      await terminal.locator("textarea").blur()
++      await keys.getByRole("button", { name: label, exact: true }).tap()
++      sent.push(input)
++      await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
++      await expect(terminal.locator("textarea")).not.toBeFocused()
++      await terminal.locator("canvas").tap()
++      await expect(terminal.locator("textarea")).toBeFocused()
++      await keys.getByRole("button", { name: label, exact: true }).tap()
++      await expect(keys.getByRole("button", { name: label, exact: true })).toHaveCSS(
++        "background-color",
++        "rgba(0, 0, 0, 0)",
++      )
++      sent.push(input)
++      await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
++      await expect(terminal.locator("textarea")).toBeFocused()
++    }
++
++    await expect.poll(() => keys.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0)
++    await terminal.locator("textarea").blur()
++    await ctrl.tap()
++    await expect(ctrl).toHaveAttribute("aria-pressed", "true")
++    await expect(terminal.locator("textarea")).toBeFocused()
++    await ctrl.tap()
++    await expect(ctrl).toHaveAttribute("aria-pressed", "false")
++    await expect(terminal.locator("textarea")).toBeFocused()
++    await terminal.locator("canvas").tap()
++    await ctrl.tap()
++    await expect(ctrl).toHaveAttribute("aria-pressed", "true")
++    await page.keyboard.insertText("c")
++    sent.push("\x03")
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
++    await expect(ctrl).toHaveAttribute("aria-pressed", "false")
++    await page.keyboard.insertText("x")
++    sent.push("x")
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
++    await page.setViewportSize({ width: 1440, height: 900 })
++    await expect(keys).toBeVisible()
++    await expect(ctrl).toBeEnabled()
++    await terminal.tap()
++    await expect(terminal.locator("textarea")).toBeFocused()
++    await ctrl.tap()
++    await expect(ctrl).toHaveAttribute("aria-pressed", "true")
++    await page.keyboard.insertText("c")
++    sent.push("\x03")
++    await expect.poll(() => pty.sockets.flatMap((socket) => socket.input).join("")).toBe(sent.join(""))
++    await expect(ctrl).toHaveAttribute("aria-pressed", "false")
++  })
++})
++
++for (const device of [
++  {
++    name: "iOS",
++    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
++    visible: true,
++  },
++  {
++    name: "desktop",
++    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
++    visible: false,
++  },
++]) {
++  test.describe(`${device.name} terminal key visibility`, () => {
++    test.use({ viewport: { width: 390, height: 844 }, userAgent: device.userAgent })
++    test("uses the operating system rather than viewport width", async ({ page }) => {
++      await openSession(page, workspace)
++      await page
++        .getByRole("tablist", { name: "Session view", exact: true })
++        .getByRole("tab", { name: "Terminal", exact: true })
++        .click()
++      await expect(page.locator('[data-component="terminal"] textarea')).toHaveCount(1)
++      const keys = page.getByRole("group", { name: "Terminal keys", exact: true })
++
++      if (device.visible) {
++        await expect(keys).toBeVisible()
++        await page.evaluate(() => {
++          const viewport = window.visualViewport!
++          Object.defineProperty(viewport, "height", { configurable: true, value: 500 })
++          Object.defineProperty(viewport, "offsetTop", { configurable: true, value: 40 })
++          viewport.dispatchEvent(new Event("resize"))
++        })
++        await expect(page.locator("#root")).toHaveCSS("height", "500px")
++        await expect(keys).toBeInViewport({ ratio: 1 })
++        await page.evaluate(() => {
++          const viewport = window.visualViewport!
++          // The test's configurable own properties shadow native readonly getters.
++          const overrides: { height?: number; offsetTop?: number } = viewport
++          delete overrides.height
++          delete overrides.offsetTop
++          viewport.dispatchEvent(new Event("resize"))
++        })
++        await expect(page.locator("#root")).not.toHaveCSS("height", "500px")
++        await page.setViewportSize({ width: 1440, height: 900 })
++        await expect(keys).toBeVisible()
++
++        return
++      }
++
++      await expect(keys).toHaveCount(0)
++    })
++  })
++}
++
+ function legacyTerminalKey() {
+   const dir = base64Encode("C:/OpenCode/TerminalInput")
+   const head = dir.slice(0, 12).replace(/[^a-zA-Z0-9._-]/g, "-")
 --- a/packages/app/src/home/sessions/view.tsx
 +++ b/packages/app/src/home/sessions/view.tsx
 @@ -38,7 +38,7 @@
@@ -262,140 +1299,346 @@
                {props.language.t("common.delete")}…
              </Menu.Item>
            </Menu.Content>
---- a/packages/app/e2e/regression/home.spec.ts
-+++ b/packages/app/e2e/regression/home.spec.ts
-@@ -109,6 +109,131 @@
-   await openHome(page)
-   await expectAppVisible(row(page, fixture.expected.sourceTitle))
-   location.release()
-+})
+--- a/packages/app/src/runtime/extension/mobile.tsx
++++ b/packages/app/src/runtime/extension/mobile.tsx
+@@ -79,12 +79,6 @@
+ 
+   const drawer = createMemo(() => (store.drawer ? props.views.find(store.drawer) : undefined))
+ 
+-  const tab = createMemo(() =>
+-    props.current === "session" || props.views.tabs().some((entry) => entry.key === props.current)
+-      ? props.current
+-      : "more",
+-  )
+-
+   let trigger: HTMLButtonElement | undefined
+ 
+   return (
+@@ -93,7 +87,7 @@
+       classList={{ "before:top-0": props.bottom, "before:bottom-0": !props.bottom }}
+       data-slot="session-mobile-view-navigation"
+     >
+-      <Tabs value={tab()} variant="line" class="!h-auto min-w-0 flex-1" data-slot="session-mobile-view-tabs">
++      <Tabs value={props.current} variant="line" class="!h-auto min-w-0 flex-1" data-slot="session-mobile-view-tabs">
+         <Tabs.List aria-label={language.t("session.view.select")} class="!h-9 !gap-0 !px-0 before:!hidden">
+           <Tabs.Trigger
+             value="session"
+@@ -115,23 +109,24 @@
+               </Tabs.Trigger>
+             )}
+           </For>
+-          <Show when={props.views.menu().length}>
+-            <Tabs.Trigger
+-              value="more"
+-              ref={(element: HTMLButtonElement) => {
+-                trigger = element
+-              }}
+-              class="min-w-0 flex-1"
+-              classes={{ button: "w-full justify-center" }}
+-              aria-haspopup="dialog"
+-              aria-expanded={store.open}
+-              onClick={() => setStore({ open: true, loaded: true, drawer: undefined })}
+-            >
+-              {language.t("session.tab.more")}
+-            </Tabs.Trigger>
+-          </Show>
+         </Tabs.List>
+       </Tabs>
++      <Show when={props.views.menu().length}>
++        <button
++          type="button"
++          ref={(element: HTMLButtonElement) => {
++            trigger = element
++          }}
++          class="mx-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[4px] text-v2-text-text-base hover:bg-[var(--v2-overlay-simple-overlay-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
++          aria-haspopup="dialog"
++          aria-label={language.t("common.moreOptions")}
++          aria-expanded={store.open}
++          aria-pressed={store.open || props.views.menu().some((entry) => entry.key === props.current)}
++          onClick={() => setStore({ open: true, loaded: true, drawer: undefined })}
++        >
++          …
++        </button>
++      </Show>
+       <Show when={store.loaded}>
+         <Suspense>
+           <MobilePanelDrawer
+--- a/packages/app/src/session/screen.tsx
++++ b/packages/app/src/session/screen.tsx
+@@ -198,6 +198,43 @@
+   })
+ 
+   const conversationVisible = createMemo(() => isDesktop() || mobileView() === "session")
 +
-+test.describe("touch Home session actions", () => {
-+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } })
++  // iOS keyboards shrink the visual viewport without resizing the layout viewport.
++  // Limit this override to the visible mobile dock; chat keeps its existing scroll behavior.
++  createEffect(() => {
++    const viewport = window.visualViewport
++    const root = document.getElementById("root")
 +
-+  test.beforeEach(async ({ page }) => {
-+    await page.addInitScript(() => Object.defineProperty(navigator, "standalone", { value: true }))
++    const ios =
++      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
++      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
++
++    if (!ios || !viewport || !root || isDesktop() || mobileEntry()?.provider.region !== "dock") return
++
++    const height = root.style.height
++    const transform = root.style.transform
++
++    const restore = () => {
++      root.style.height = height
++      root.style.transform = transform
++    }
++
++    const sync = () => {
++      if (viewport.scale !== 1 || window.innerHeight - viewport.height < 100) return restore()
++
++      root.style.height = `${viewport.height}px`
++      root.style.transform = `translateY(${viewport.offsetTop}px)`
++    }
++
++    viewport.addEventListener("resize", sync)
++    viewport.addEventListener("scroll", sync)
++    sync()
++    onCleanup(() => {
++      viewport.removeEventListener("resize", sync)
++      viewport.removeEventListener("scroll", sync)
++      restore()
++    })
++  })
+   createEffect(() => {
+     if (!isDesktop() && screen.dock.open()) setStore("mobileDockCached", true)
+   })
+--- a/packages/app/src/session/timeline/virtualizer.tsx
++++ b/packages/app/src/session/timeline/virtualizer.tsx
+@@ -188,6 +188,7 @@
+   let maxScroll = 0
+   let virtualContent: HTMLDivElement | undefined
+   let scrollTop = 0
++  let reading: { offset: number; pinned: boolean } | undefined
+   let reportOffset: ((offset: number, scrolling: boolean) => void) | undefined
+   let reportRect: ((rect: { width: number; height: number }) => void) | undefined
+   let batchingColdSizes = false
+@@ -201,7 +202,19 @@
+       reportRect = callback
+ 
+       return observeElementRect(instance, (rect) => {
+-        if (active()) callback(rect)
++        if (!active()) return
++        // Android's keyboard resizes the scrollport, not its contents or composer.
++        // Keep an already-following timeline at the end without moving history readers.
++
++        const follow =
++          /Android/i.test(navigator.userAgent) &&
++          input.pinned() &&
++          instance.scrollRect !== null &&
++          rect.height !== instance.scrollRect.height
++
++        callback(rect)
++
++        if (follow) instance.scrollToEnd()
+       })
+     },
+     // Route navigation detaches and reattaches the scroll element, which drops its offset.
+@@ -232,6 +245,8 @@
+ 
+       return observeElementOffsetReconnectAware(instance, reportOffset, () => {
+         if (!active()) return
++
++        if (reading && !reading.pinned) input.onUnpin()
+         virtualContent?.querySelectorAll<HTMLDivElement>("[data-index]").forEach(virtualizer.measureElement)
+ 
+         if (input.pinned()) virtualizer.scrollToEnd()
+@@ -490,6 +505,29 @@
+ 
+   const virtualRowKeys = createMemo(() => virtualizer.getVirtualItems().map((item) => String(item.key)))
+ 
++  onMount(() => {
++    // Capture before a navigation click detaches this cached timeline, including
++    // writes whose native scroll event has not been delivered yet.
++    const save = (event: MouseEvent) => {
++      const root = listRoot()
++
++      if (
++        !active() ||
++        !root?.isConnected ||
++        !(event.target instanceof Element) ||
++        !event.target.closest('[data-slot="session-mobile-view-navigation"]')
++      )
++        return
++      reading = {
++        offset: Math.max(0, root.scrollTop + rendering.scrollAdjustment),
++        pinned: input.pinned() && root.scrollHeight - root.clientHeight - root.scrollTop <= endEpsilon,
++      }
++    }
++
++    document.addEventListener("click", save, true)
++    onCleanup(() => document.removeEventListener("click", save, true))
 +  })
 +
-+  for (const opening of ["timer", "native"] as const) {
-+    test(`${opening} long press survives release, then accepts a real outside pointer`, async ({ page }) => {
-+      await openHome(page)
-+      const target = row(page, fixture.expected.targetTitle)
-+      await expect(target).toBeVisible()
-+      await page.clock.install()
-+      await page.clock.pauseAt(new Date())
-+      await target.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 1, button: 0 })
+   createEffect(() => {
+     if (!active()) return
+     const root = listRoot()
+@@ -505,9 +543,23 @@
+ 
+       // A route can open this timeline on a tool call, e.g. a shell picked from inside a subagent, instead of its end.
+       const target = input.reveal?.target()
+-
+-      if (target && revealPart(target)) input.reveal?.done()
+-      else if (input.pinned()) virtualizer.scrollToEnd()
++      const revealed = target && revealPart(target)
++      const following = reading?.pinned ?? input.pinned()
 +
-+      if (opening === "timer") await page.clock.runFor(500)
++      if (revealed) input.reveal?.done()
 +
-+      if (opening === "native") {
-+        await target.dispatchEvent("pointercancel", { pointerType: "touch", pointerId: 1 })
-+        await target.evaluate((element) =>
-+          element.dispatchEvent(new TouchEvent("touchcancel", { bubbles: true, cancelable: true })),
-+        )
-+        await target.dispatchEvent("contextmenu", { clientX: 48, clientY: 120 })
++      if (!revealed && following) virtualizer.scrollToEnd()
++
++      if (!revealed && !following && reading) {
++        input.onUnpin()
++        const offset = reading.offset
++
++        requestAnimationFrame(() => {
++          if (!active() || !root.isConnected) return
++          root.scrollTo({ top: offset, behavior: "instant" })
++          reportOffset?.(root.scrollTop, false)
++        })
 +      }
-+
-+      const rename = page.getByRole("menuitem", { name: "Rename", exact: true })
-+      await expect(rename).toBeVisible()
-+      await page.clock.runFor(1)
-+      await target.dispatchEvent("pointercancel", { pointerType: "touch", pointerId: 1 })
-+      await page.evaluate(() =>
-+        document.body.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true })),
-+      )
-+      await target.dispatchEvent("pointerdown", { pointerType: "mouse", button: 0 })
-+      await target.dispatchEvent("click", { detail: 1, button: 0 })
-+      await page.evaluate(() => document.body.dispatchEvent(new FocusEvent("focusin", { bubbles: true })))
-+      await expect(rename).toBeVisible()
-+      await expect(page).toHaveURL("/")
-+      await page.evaluate(() =>
-+        document.body.dispatchEvent(
-+          new PointerEvent("pointerdown", {
-+            bubbles: true,
-+            pointerType: "mouse",
-+            button: 0,
-+          }),
-+        ),
-+      )
-+      await page.clock.resume()
-+      await expect(rename).toBeHidden()
-+      await target.tap()
-+      await expect(page).toHaveURL(new RegExp(`/session/${fixture.targetID}$`))
-+    })
+ 
+       reportOffset?.(root.scrollTop, false)
+       settleColdBottom()
+--- a/packages/app/src/shell/titlebar/tab-nav.tsx
++++ b/packages/app/src/shell/titlebar/tab-nav.tsx
+@@ -41,6 +41,7 @@
+   const language = useLanguage()
+   const [menu, setMenu] = createStore({ open: false, rename: false })
+   const [editing, setEditing] = createSignal(false)
++  const [suppressTouchMenu, setSuppressTouchMenu] = createSignal(false)
+   const [titleOverflowing, setTitleOverflowing] = createSignal(false)
+   let tabRoot!: HTMLDivElement
+   let titleEl!: HTMLSpanElement
+@@ -249,7 +250,13 @@
+       </Show>
+       <Menu.Context.Trigger
+         as="a"
+-        disabled={editing() || props.dragging}
++        disabled={editing() || props.dragging || suppressTouchMenu()}
++        onPointerDown={(event) => {
++          if (props.orientation !== "vertical" || event.pointerType !== "touch") return
++          // Kobalte checks disabled after this handler; do not arm its long-press timer.
++          setSuppressTouchMenu(true)
++          queueMicrotask(() => setSuppressTouchMenu(false))
++        }}
+         aria-haspopup="menu"
+         aria-expanded={menu.open}
+         data-slot="tab-link"
+--- a/packages/app/src/shell/titlebar/tab-strip.tsx
++++ b/packages/app/src/shell/titlebar/tab-strip.tsx
+@@ -302,6 +302,10 @@
+     >
+       <div
+         data-slot={vertical() ? "vertical-tabs-scroll" : "titlebar-tabs-scroll"}
++        on:touchmove={(event) => {
++          // Keep the drawer's document-level scroll lock out of this native scrollport.
++          if (vertical()) event.stopPropagation()
++        }}
+         class="flex min-w-0 no-scrollbar [app-region:no-drag]"
+         classList={{
+           "flex-row items-center gap-1.5 overflow-x-auto": !vertical(),
+@@ -313,7 +317,10 @@
+             PointerSensor.configure({
+               activationConstraints: (event) =>
+                 event.pointerType === "touch"
+-                  ? [new PointerActivationConstraints.Distance({ value: 8 })]
++                  ? vertical()
++                    ? // Let a swipe scroll; only a stationary hold starts reordering.
++                      [new PointerActivationConstraints.Delay({ value: 350, tolerance: 8 })]
++                    : [new PointerActivationConstraints.Distance({ value: 8 })]
+                   : [new PointerActivationConstraints.Distance({ value: 4 })],
+               preventActivation: (event) =>
+                 event.target instanceof Element &&
+--- a/packages/app/src/workspaces/selection/dialog.tsx
++++ b/packages/app/src/workspaces/selection/dialog.tsx
+@@ -292,6 +292,13 @@
+         }
+         button[data-type="item"]:hover {
+           background: var(--v2-overlay-simple-overlay-hover) !important;
++        }
++        @media (hover: none) {
++          button[data-type="item"]:hover:not([data-item-selected="true"]),
++          button[data-type="item"][data-item-context-hover="true"]:not([data-item-selected="true"]) {
++            background: transparent !important;
++            --truncate-marker-background-overlay-color: transparent !important;
++          }
+         }
+         button[data-type="item"]:focus-visible {
+           outline: none !important;
+--- a/packages/gui-extensions/src/file/browser.tsx
++++ b/packages/gui-extensions/src/file/browser.tsx
+@@ -20,6 +20,7 @@
+ import { fileTabPath, isFileTab } from "./path"
+ import FileTreeV2 from "./tree-v2"
+ import { SessionFileView } from "./view"
++import { createFileTreeRefresh } from "./refresh"
+ 
+ const emptyFiles: string[] = []
+ 
+@@ -216,6 +217,7 @@
+   screen: SessionScreen
+ }) {
+   const panel = usePanel()
++  createFileTreeRefresh(props, () => panel.visible())
+   const shared = useShared()
+   const id = () => props.tab().id
+   const placeholder = () => !isFileTab(id())
+--- a/packages/gui-extensions/src/file/mobile.tsx
++++ b/packages/gui-extensions/src/file/mobile.tsx
+@@ -7,6 +7,7 @@
+ import { SessionFileBrowserTab } from "./browser"
+ import { useShared } from "./context"
+ import { fileTabPath, isFileTab } from "./path"
++import { createFileTreeRefresh } from "./refresh"
+ 
+ const OPEN_FILE_TAB = "open-file"
+ 
+@@ -15,6 +16,7 @@
+   const layout = ctx.layout
+   const shared = useShared()
+   const panel = usePanel()
++  createFileTreeRefresh(props, () => panel.visible())
+   const file = props.screen.file
+   const opened = createMemo(() => panel.open().filter(isFileTab))
+   // The selected side tab when it is a file tab. A gone selection falls back to the first file tab.
+@@ -31,6 +33,12 @@
+ 
+   const open = (path: string) => {
+     shared.open(props.session, path)
 +  }
 +
-+  test("release protection expires without trapping later focus", async ({ page }) => {
-+    await openHome(page)
-+    await page.clock.install()
-+    const target = row(page, fixture.expected.targetTitle)
-+    await expect(target).toBeVisible()
-+    await target.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 1, button: 0 })
-+    await target.dispatchEvent("contextmenu", { clientX: 48, clientY: 120 })
-+    const rename = page.getByRole("menuitem", { name: "Rename", exact: true })
-+    await expect(rename).toBeVisible()
-+    await page.evaluate(() =>
-+      document.body.dispatchEvent(new TouchEvent("touchend", { bubbles: true, cancelable: true })),
-+    )
-+    await page.clock.runFor(800)
-+    await page.evaluate(() => document.body.dispatchEvent(new FocusEvent("focusin", { bubbles: true })))
-+    await expect(rename).toBeHidden()
-+  })
-+
-+  test("touch rename waits for release click and keeps the editor focused", async ({ page }) => {
-+    await openHome(page)
-+    const target = row(page, fixture.expected.targetTitle)
-+    await target.click({ button: "right" })
-+    const rename = page.getByRole("menuitem", { name: "Rename", exact: true })
-+    await rename.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 2, button: 0 })
-+    await rename.dispatchEvent("pointerup", { pointerType: "touch", pointerId: 2, button: 0 })
-+    const input = page.locator('[data-component="home-session-rename"]')
-+    // Opening on pointerup leaves the input exposed to the subsequent release click.
-+    await expect(input).toHaveCount(0)
-+    await rename.dispatchEvent("click", { detail: 1, button: 0 })
-+    await expect(input).toBeFocused()
-+    await expect(input).toHaveValue(fixture.expected.targetTitle)
-+    await input.fill("Touch renamed")
-+
-+    const saved = page.waitForRequest(
-+      (request) =>
-+        request.method() === "PATCH" && new URL(request.url()).pathname.endsWith(`/session/${fixture.targetID}`),
-+    )
-+
-+    await input.press("Enter")
-+    expect((await saved).postDataJSON()).toEqual({ title: "Touch renamed" })
-+    await expect(row(page, "Touch renamed")).toBeVisible()
-+    await row(page, "Touch renamed").click({ button: "right" })
-+    await page.getByRole("menuitem", { name: "Rename", exact: true }).tap()
-+    await expect(input).toBeFocused()
-+    await input.press("Escape")
-+    await expect(input).toBeHidden()
-+    await expect(row(page, "Touch renamed")).toBeFocused()
-+    await row(page, "Touch renamed").click({ button: "right" })
-+    await page.getByRole("menuitem", { name: "Rename", exact: true }).tap()
-+    await input.fill("Cancelled draft")
-+    await page.getByRole("textbox", { name: "Search sessions" }).tap()
-+    await expect(input).toBeHidden()
-+    await expect(row(page, "Touch renamed")).toBeVisible()
-+  })
-+
-+  test("touch delete waits for release click and keeps the confirmation open", async ({ page }) => {
-+    await openHome(page)
-+    const target = row(page, fixture.expected.targetTitle)
-+    await target.click({ button: "right" })
-+    const remove = page.getByRole("menuitem", { name: "Delete…" })
-+    await remove.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 2, button: 0 })
-+    await remove.dispatchEvent("pointerup", { pointerType: "touch", pointerId: 2, button: 0 })
-+    const dialog = page.getByRole("dialog")
-+    await expect(dialog).toHaveCount(0)
-+    await remove.dispatchEvent("click", { detail: 1, button: 0 })
-+    await expect(dialog).toContainText(`Delete session "${fixture.expected.targetTitle}"?`)
-+    await dialog.getByRole("button", { name: "Cancel", exact: true }).tap()
-+    await expect(dialog).toBeHidden()
-+    await expect(target).toBeVisible()
-+  })
- })
++  const selectTab = (id: string) => {
++    // Selecting an existing tab uses cached content; opening from the list rereads it.
++    layout.open(`file:${id}`, props.session)
++    shared.filter.setBrowsing(props.session.key, false)
+   }
  
- test("Home and the directory picker load without newer browser APIs", async ({ page }) => {
+   return (
+@@ -52,7 +60,7 @@
+             if (browsing()) return
+ 
+             if (id === OPEN_FILE_TAB) return
+-            open(fileTabPath(file, id))
++            selectTab(id)
+           }}
+           variant="line"
+           class="min-w-0 flex-1 !h-auto"
+@@ -62,7 +70,7 @@
+               {(id) => (
+                 <Tabs.Trigger
+                   value={id}
+-                  onClick={() => open(fileTabPath(file, id))}
++                  onClick={() => selectTab(id)}
+                   class="shrink-0 max-w-48"
+                   classes={{ button: "min-w-0" }}
+                   closeButton={
 --- /dev/null
 +++ b/packages/gui-extensions/src/file/refresh.tsx
 @@ -0,0 +1,47 @@
@@ -446,55 +1689,26 @@
 +    () => void refresh(),
 +  )
 +}
---- a/packages/gui-extensions/src/file/mobile.tsx
-+++ b/packages/gui-extensions/src/file/mobile.tsx
-@@ -7,6 +7,7 @@
- import { SessionFileBrowserTab } from "./browser"
- import { useShared } from "./context"
- import { fileTabPath, isFileTab } from "./path"
-+import { createFileTreeRefresh } from "./refresh"
- 
- const OPEN_FILE_TAB = "open-file"
- 
-@@ -15,6 +16,7 @@
-   const layout = ctx.layout
-   const shared = useShared()
-   const panel = usePanel()
-+  createFileTreeRefresh(props, () => panel.visible())
-   const file = props.screen.file
-   const opened = createMemo(() => panel.open().filter(isFileTab))
-   // The selected side tab when it is a file tab. A gone selection falls back to the first file tab.
-@@ -31,6 +33,12 @@
- 
-   const open = (path: string) => {
-     shared.open(props.session, path)
-+  }
-+
-+  const selectTab = (id: string) => {
-+    // Selecting an existing tab uses cached content; opening from the list rereads it.
-+    layout.open(`file:${id}`, props.session)
-+    shared.filter.setBrowsing(props.session.key, false)
+--- a/packages/gui-extensions/src/file/renderer.tsx
++++ b/packages/gui-extensions/src/file/renderer.tsx
+@@ -127,7 +127,7 @@
+     // to the first tab and reselects it.
+     layout.open(key(screen.file, path), session, options)
+     updateFilter(session.key, { browsing: false })
+-    void screen.file.sync(path)
++    void screen.file.sync(path, { force: true })
    }
  
-   return (
-@@ -52,7 +60,7 @@
-             if (browsing()) return
- 
-             if (id === OPEN_FILE_TAB) return
--            open(fileTabPath(file, id))
-+            selectTab(id)
-           }}
-           variant="line"
-           class="min-w-0 flex-1 !h-auto"
-@@ -62,7 +70,7 @@
-               {(id) => (
-                 <Tabs.Trigger
-                   value={id}
--                  onClick={() => open(fileTabPath(file, id))}
-+                  onClick={() => selectTab(id)}
-                   class="shrink-0 max-w-48"
-                   classes={{ button: "min-w-0" }}
-                   closeButton={
+   const applySelection = (session: MountedSession, files: Files, path: string, selection: LineRange | undefined) => {
+@@ -314,7 +314,7 @@
+         return ctx.t("mobile.title")
+       },
+       order: 20,
+-      kind: "menu",
++      kind: "tab",
+       icon: "folder",
+     },
+     list(input) {
 --- a/packages/gui-extensions/src/file/sidebar.tsx
 +++ b/packages/gui-extensions/src/file/sidebar.tsx
 @@ -4,6 +4,7 @@
@@ -513,124 +1727,33 @@
    const count = createMemo(() => changes()?.diffs(props.session).length ?? 0)
    const ready = createMemo(() => changes()?.ready(props.session) ?? false)
    const diffFiles = createMemo(() => (changes()?.diffs(props.session) ?? []).map((diff) => diff.file))
---- a/packages/app/e2e/regression/mobile-extensions.spec.ts
-+++ b/packages/app/e2e/regression/mobile-extensions.spec.ts
-@@ -3,23 +3,35 @@
- import { fixture, mockStressTimeline } from "../utils/session-fixture"
- import { fileNode } from "../utils/workspace"
- 
--test.use({ viewport: { width: 390, height: 844 } })
-+test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
- 
- async function openFiles(page: Page) {
-   await page
-     .getByRole("tablist", { name: "Session view", exact: true })
--    .getByRole("tab", { name: "More...", exact: true })
--    .click()
--  await page
--    .getByRole("dialog", { name: "More options", exact: true })
--    .getByRole("button", { name: "Files", exact: true })
-+    .getByRole("tab", { name: "Files", exact: true })
-     .click()
+--- a/packages/gui-extensions/src/terminal/i18n/en.ts
++++ b/packages/gui-extensions/src/terminal/i18n/en.ts
+@@ -10,4 +10,13 @@
+   "connectionLost.abnormalClose": "WebSocket closed abnormally: {{code}}",
+   "connectionLost.description": "The terminal connection was interrupted. This can happen when the server restarts.",
+   "tab.title": "Terminal",
++  "keys.title": "Terminal keys",
++  "keys.up": "Up arrow",
++  "keys.down": "Down arrow",
++  "keys.left": "Left arrow",
++  "keys.right": "Right arrow",
++  "keys.home": "Home",
++  "keys.pageUp": "Page Up",
++  "keys.pageDown": "Page Down",
++  "keys.end": "End",
  }
- 
- test("mobile files browse, comment, search, and close tabs", async ({ page }) => {
-+  const listing = ["first.ts", "second.ts"]
-+  const nested = ["src/before.ts"]
-+  const contentRequests: string[] = []
-+  const contents = new Map<string, string>()
-   await mockStressTimeline(page, {
--    fileList: (path) => (path ? [] : ["first.ts", "second.ts"].map((name) => fileNode(fixture.directory, name))),
--    fileContent: (path) => `contents:${path}`,
-+    fileList: (path) =>
-+      path === "src"
-+        ? nested.map((name) => fileNode(fixture.directory, name))
-+        : path
-+          ? []
-+          : [
-+              ...listing.map((name) => fileNode(fixture.directory, name)),
-+              fileNode(fixture.directory, "src", "directory"),
-+            ],
-+    fileContent: (path) => {
-+      contentRequests.push(path)
-+
-+      return contents.get(path) ?? `contents:${path}`
-+    },
-     findFiles: ({ query }) =>
-       ["first.ts", "second.ts"].flatMap((path) => (path.includes(query) ? [fileNode(fixture.directory, path)] : [])),
-   })
-@@ -27,6 +39,8 @@
-   const navigation = page.getByRole("tablist", { name: "Session view", exact: true })
-   await openFiles(page)
-   const files = page.locator('[data-slot="session-mobile-files"]')
-+  await files.getByRole("button", { name: "src", exact: true }).click()
-+  await expect(files.getByRole("button", { name: "before.ts", exact: true })).toBeEnabled()
-   await files.getByRole("button", { name: "first.ts", exact: true }).click()
-   await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
-   await files.locator('[data-column-number="1"]').click()
-@@ -61,21 +75,42 @@
-     .click()
-   await expect(session).toHaveAttribute("aria-selected", "true")
-   await expect(page.getByRole("textbox", { name: "Prompt", exact: true })).toBeVisible()
-+  listing.push("automatic.ts")
-+  nested.splice(0, 1, "src/after.ts")
-+  const requestsBeforeReturn = contentRequests.length
-   await openFiles(page)
-   await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
-   const filter = files.getByRole("combobox", { name: "Filter files", exact: true })
-   await expect(filter).toBeHidden()
-   await files.getByRole("button", { name: "All files", exact: true }).click()
-+  await expect(files.getByRole("button", { name: "second.ts", exact: true })).toBeEnabled()
-+  await expect(files.getByRole("button", { name: "automatic.ts", exact: true })).toBeEnabled()
-+  await expect(files.getByRole("button", { name: "after.ts", exact: true })).toBeEnabled()
-+  await expect(files.getByRole("button", { name: "before.ts", exact: true })).toHaveCount(0)
-+  expect(contentRequests).toHaveLength(requestsBeforeReturn)
-+  await expect(files.getByRole("button", { name: "Refresh files", exact: true })).toHaveCount(0)
-+  await session.click()
-+  listing.push("refreshed.ts")
-+  await openFiles(page)
-+  await files.getByRole("button", { name: "All files", exact: true }).click()
-+  await expect(files.getByRole("button", { name: "refreshed.ts", exact: true })).toBeEnabled()
-   await filter.fill("second")
-   await files.getByRole("option", { name: "second.ts", exact: true }).click()
-   await expect(files.getByText("contents:second.ts", { exact: true })).toBeVisible()
-   const openTabs = files.getByRole("tablist", { name: "Open files", exact: true })
-   await expect(openTabs.getByRole("tab")).toHaveText(["first.ts", "second.ts"])
-+  contents.set("first.ts", "reopened:first.ts")
-+  const requestsBeforeSwitch = contentRequests.length
-   await openTabs.getByRole("tab", { name: "first.ts", exact: true }).click()
-   await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
-+  expect(contentRequests).toHaveLength(requestsBeforeSwitch)
-   await navigation.getByRole("tab", { name: "Session", exact: true }).click()
-   await openFiles(page)
-   await expect(files.getByText("contents:first.ts", { exact: true })).toBeVisible()
-+  await files.getByRole("button", { name: "All files", exact: true }).click()
-+  await filter.fill("")
-+  await files.getByRole("button", { name: "first.ts", exact: true }).click()
-+  await expect(files.getByText("reopened:first.ts", { exact: true })).toBeVisible()
-   await files
-     .locator('[data-slot="tabs-v2-trigger-wrapper"]')
-     .filter({ has: page.getByRole("tab", { name: "first.ts", exact: true }) })
-@@ -250,7 +285,7 @@
-   for (const file of ["added.ts", "modified.ts", "added.ts", "modified.ts"]) {
-     await navigation.getByRole("tab", { name: "Changes", exact: true }).click()
-     await review.locator(`[data-file="${file}"]`).getByRole("button", { name: "Open file", exact: true }).click()
--    await expect(navigation.getByRole("tab", { name: "More...", exact: true })).toHaveAttribute("aria-selected", "true")
-+    await expect(navigation.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true")
-     await expect(selected).toHaveText([file])
-     await expect(files).toHaveAttribute("data-browsing", "false")
- 
-@@ -264,8 +299,8 @@
-   await page.goto(sessionHref(fixture.targetID))
- 
-   const more = page
--    .getByRole("tablist", { name: "Session view", exact: true })
--    .getByRole("tab", { name: "More...", exact: true })
-+    .locator('[data-slot="session-mobile-view-navigation"]')
-+    .getByRole("button", { name: "More options", exact: true })
- 
-   const drawer = page.getByRole("dialog", { name: "Session details", exact: true })
-   const overlay = page.locator('[data-slot="mobile-drawer-overlay"]')
+--- a/packages/gui-extensions/src/terminal/renderer.tsx
++++ b/packages/gui-extensions/src/terminal/renderer.tsx
+@@ -149,7 +149,7 @@
+         return ctx.t("tab.title")
+       },
+       order: 30,
+-      kind: "menu",
++      kind: "tab",
+       icon: "terminal",
+     },
+     list: () => [tab],
 --- a/packages/gui-extensions/src/terminal/terminal.tsx
 +++ b/packages/gui-extensions/src/terminal/terminal.tsx
 @@ -7,7 +7,9 @@
@@ -774,20 +1897,19 @@
    const theme = useTheme()
    let container!: HTMLDivElement
  
-@@ -401,6 +501,12 @@
-       activeElement.blur()
+@@ -402,6 +502,11 @@
      }
  
-+    focusTerminal()
+     focusTerminal()
 +  }
 +
 +  const sendKey = (data: string) => {
 +    if (disposed || !term || ws?.readyState !== WebSocket.OPEN) return
 +    term.input(data, true)
-     focusTerminal()
    }
  
-@@ -497,6 +603,7 @@
+   const handleLinkClick = (event: MouseEvent) => {
+@@ -497,6 +602,7 @@
        useTerminalUiBindings({
          container,
          term: t,
@@ -795,7 +1917,7 @@
          cleanups,
          handlePointerDown,
          handleLinkClick,
-@@ -534,10 +641,20 @@
+@@ -534,10 +640,20 @@
        cleanups.push(() => disposeIfDisposable(onResize))
  
        const onData = t.onData((data) => {
@@ -817,7 +1939,7 @@
  
        const onKey = t.onKey((key) => {
          if (key.key == "Enter") {
-@@ -663,10 +780,12 @@
+@@ -663,10 +779,12 @@
          }
  
          ws = socket
@@ -830,7 +1952,7 @@
            local.onConnect?.()
            scheduleSize(t.cols, t.rows)
  
-@@ -720,7 +839,11 @@
+@@ -720,7 +838,11 @@
            socket.removeEventListener("error", handleError)
            socket.removeEventListener("close", handleClose)
  
@@ -843,7 +1965,7 @@
  
            if (drop === stop) drop = undefined
  
-@@ -728,7 +851,11 @@
+@@ -728,7 +850,11 @@
          }
  
          const handleClose = (event: CloseEvent) => {
@@ -856,7 +1978,7 @@
  
            if (drop === stop) drop = undefined
            socket.removeEventListener("open", handleOpen)
-@@ -790,20 +917,76 @@
+@@ -790,20 +916,76 @@
    })
  
    return (
@@ -948,1093 +2070,3 @@
 +    </div>
    )
  }
---- a/packages/gui-extensions/src/terminal/i18n/en.ts
-+++ b/packages/gui-extensions/src/terminal/i18n/en.ts
-@@ -10,4 +10,13 @@
-   "connectionLost.abnormalClose": "WebSocket closed abnormally: {{code}}",
-   "connectionLost.description": "The terminal connection was interrupted. This can happen when the server restarts.",
-   "tab.title": "Terminal",
-+  "keys.title": "Terminal keys",
-+  "keys.up": "Up arrow",
-+  "keys.down": "Down arrow",
-+  "keys.left": "Left arrow",
-+  "keys.right": "Right arrow",
-+  "keys.home": "Home",
-+  "keys.pageUp": "Page Up",
-+  "keys.pageDown": "Page Down",
-+  "keys.end": "End",
- }
---- a/packages/app/e2e/regression/terminal-input.spec.ts
-+++ b/packages/app/e2e/regression/terminal-input.spec.ts
-@@ -182,6 +182,230 @@
-   )
- })
- 
-+test.describe("mobile terminal keys", () => {
-+  test.use({
-+    viewport: { width: 390, height: 844 },
-+    hasTouch: true,
-+    userAgent: "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36",
-+  })
-+
-+  test("swipes through scrollback and routes full-screen swipes to the PTY", async ({ page }) => {
-+    const { pty } = await openSession(page, workspace)
-+    await page
-+      .getByRole("tablist", { name: "Session view", exact: true })
-+      .getByRole("tab", { name: "Terminal", exact: true })
-+      .tap()
-+    const terminal = page.locator('[data-component="terminal"]')
-+    await expect(terminal.locator("textarea")).toHaveCount(1)
-+    await expect.poll(() => pty.sockets.length).toBe(1)
-+    pty.send("\x1b[?25l" + Array.from({ length: 200 }, (_, i) => `history-${i}\r\n`).join("") + "\x1b[6n")
-+    await expect.poll(() => pty.sockets[0]!.input.join("")).toMatch(/\x1b\[\d+;\d+R$/)
-+    const ready = pty.sockets[0]!.input.join("")
-+    await expect(terminal).toHaveCSS("opacity", "1")
-+    const canvas = terminal.locator("canvas")
-+    const textarea = terminal.locator("textarea")
-+    await textarea.blur()
-+    await expect(textarea).not.toBeFocused()
-+    await canvas.screenshot()
-+    // Compare the text area only, excluding Ghostty's fading scrollbar.
-+
-+    const image = () =>
-+      canvas.evaluate((element) => {
-+        if (!(element instanceof HTMLCanvasElement)) throw new Error("terminal canvas is missing")
-+
-+        const crop = document.createElement("canvas")
-+        crop.width = element.width - 24 * devicePixelRatio
-+        crop.height = element.height
-+        crop.getContext("2d")!.drawImage(element, 0, 0)
-+
-+        return crop.toDataURL()
-+      })
-+
-+    const bottom = await image()
-+
-+    const swipe = (distance: number) =>
-+      terminal.evaluate(async (element, delta) => {
-+        const target = element.querySelector("canvas") ?? element
-+
-+        const emit = (type: string, y: number, active = true) => {
-+          // Desktop WebKit exposes Touch but does not allow constructing it.
-+          const point = { identifier: 1, target, clientX: 100, clientY: y }
-+          const event = new Event(type, { bubbles: true, cancelable: true })
-+          Object.defineProperties(event, {
-+            touches: { value: active ? [point] : [] },
-+            changedTouches: { value: [point] },
-+          })
-+          target.dispatchEvent(event)
-+        }
-+
-+        target.dispatchEvent(
-+          new PointerEvent("pointerdown", {
-+            pointerType: "touch",
-+            pointerId: 1,
-+            bubbles: true,
-+            cancelable: true,
-+          }),
-+        )
-+        emit("touchstart", 300)
-+        // Small moves must accumulate, even in the alternate screen.
-+
-+        for (let i = 1; i <= Math.abs(delta); i++) {
-+          emit("touchmove", 300 + Math.sign(delta) * i)
-+          // Real gestures span frames; synchronous wheel bursts overwrite Ghostty's animation target.
-+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-+        }
-+
-+        emit("touchend", 300 + delta, false)
-+      }, distance)
-+
-+    await swipe(132)
-+    await expect.poll(image).not.toBe(bottom)
-+    await expect(textarea).not.toBeFocused()
-+    expect(pty.sockets[0]!.input.join("")).toBe(ready)
-+    await swipe(-264)
-+    await expect.poll(image).toBe(bottom)
-+    await expect(textarea).not.toBeFocused()
-+
-+    pty.send("\x1b[?1049hfull-screen\x1b[6n")
-+    // Cursor response proves the mode switch has been processed before the gesture.
-+    await expect.poll(() => pty.sockets[0]!.input.join("")).toMatch(/^\x1b\[\d+;\d+R\x1b\[\d+;\d+R$/)
-+    const response = pty.sockets[0]!.input.join("")
-+    await swipe(66)
-+    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(response + "\x1b[A\x1b[A")
-+    await swipe(-66)
-+    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(response + "\x1b[A\x1b[A\x1b[B\x1b[B")
-+    await expect(textarea).not.toBeFocused()
-+    await canvas.tap()
-+    await expect(textarea).toBeFocused()
-+  })
-+
-+  test("sends auxiliary keys without losing focus and releases Ctrl after one input", async ({ page }) => {
-+    const { pty } = await openSession(page, workspace)
-+    await page
-+      .getByRole("tablist", { name: "Session view", exact: true })
-+      .getByRole("tab", { name: "Terminal", exact: true })
-+      .tap()
-+    const terminal = page.locator('[data-component="terminal"]')
-+    await expect(terminal.locator("textarea")).toHaveCount(1)
-+    await expect.poll(() => pty.sockets.length).toBe(1)
-+    pty.send("ready")
-+    await expect(terminal).toHaveCSS("opacity", "1")
-+    await terminal.tap()
-+    const keys = page.getByRole("group", { name: "Terminal keys", exact: true })
-+    const ctrl = keys.getByRole("button", { name: "Ctrl", exact: true })
-+    await expect(ctrl).toBeEnabled()
-+    await expect(keys).toHaveCSS("scrollbar-width", "none")
-+    await expect
-+      .poll(() =>
-+        keys.evaluate(
-+          (element) =>
-+            element.scrollWidth > element.clientWidth &&
-+            new Set(Array.from(element.querySelectorAll("button"), (button) => button.offsetTop)).size === 1,
-+        ),
-+      )
-+      .toBe(true)
-+    const sent: string[] = []
-+
-+    for (const [label, input] of [
-+      ["Esc", "\x1b"],
-+      ["Tab", "\t"],
-+      ["Up arrow", "\x1b[A"],
-+      ["Down arrow", "\x1b[B"],
-+      ["Left arrow", "\x1b[D"],
-+      ["Right arrow", "\x1b[C"],
-+      ["Ctrl+C", "\x03"],
-+      ["Ctrl+D", "\x04"],
-+      ["Ctrl+L", "\x0c"],
-+      ["Home", "\x1b[H"],
-+      ["Page Up", "\x1b[5~"],
-+      ["Page Down", "\x1b[6~"],
-+      ["End", "\x1b[F"],
-+    ]) {
-+      await keys.getByRole("button", { name: label, exact: true }).tap()
-+      await expect(keys.getByRole("button", { name: label, exact: true })).toHaveCSS(
-+        "background-color",
-+        "rgba(0, 0, 0, 0)",
-+      )
-+      sent.push(input)
-+      await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
-+      await expect(terminal.locator("textarea")).toBeFocused()
-+    }
-+
-+    await expect.poll(() => keys.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0)
-+    await ctrl.tap()
-+    await expect(ctrl).toHaveAttribute("aria-pressed", "true")
-+    await page.keyboard.insertText("c")
-+    sent.push("\x03")
-+    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
-+    await expect(ctrl).toHaveAttribute("aria-pressed", "false")
-+    await page.keyboard.insertText("x")
-+    sent.push("x")
-+    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
-+    await page.setViewportSize({ width: 1440, height: 900 })
-+    await expect(keys).toBeVisible()
-+    await expect(ctrl).toBeEnabled()
-+    await terminal.tap()
-+    await expect(terminal.locator("textarea")).toBeFocused()
-+    await ctrl.tap()
-+    await expect(ctrl).toHaveAttribute("aria-pressed", "true")
-+    await page.keyboard.insertText("c")
-+    sent.push("\x03")
-+    await expect.poll(() => pty.sockets.flatMap((socket) => socket.input).join("")).toBe(sent.join(""))
-+    await expect(ctrl).toHaveAttribute("aria-pressed", "false")
-+  })
-+})
-+
-+for (const device of [
-+  {
-+    name: "iOS",
-+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
-+    visible: true,
-+  },
-+  {
-+    name: "desktop",
-+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36",
-+    visible: false,
-+  },
-+]) {
-+  test.describe(`${device.name} terminal key visibility`, () => {
-+    test.use({ viewport: { width: 390, height: 844 }, userAgent: device.userAgent })
-+    test("uses the operating system rather than viewport width", async ({ page }) => {
-+      await openSession(page, workspace)
-+      await page
-+        .getByRole("tablist", { name: "Session view", exact: true })
-+        .getByRole("tab", { name: "Terminal", exact: true })
-+        .click()
-+      await expect(page.locator('[data-component="terminal"] textarea')).toHaveCount(1)
-+      const keys = page.getByRole("group", { name: "Terminal keys", exact: true })
-+
-+      if (device.visible) {
-+        await expect(keys).toBeVisible()
-+        await page.evaluate(() => {
-+          const viewport = window.visualViewport!
-+          Object.defineProperty(viewport, "height", { configurable: true, value: 500 })
-+          Object.defineProperty(viewport, "offsetTop", { configurable: true, value: 40 })
-+          viewport.dispatchEvent(new Event("resize"))
-+        })
-+        await expect(page.locator("#root")).toHaveCSS("height", "500px")
-+        await expect(keys).toBeInViewport({ ratio: 1 })
-+        await page.evaluate(() => {
-+          const viewport = window.visualViewport!
-+          delete (viewport as unknown as Record<string, unknown>).height
-+          delete (viewport as unknown as Record<string, unknown>).offsetTop
-+          viewport.dispatchEvent(new Event("resize"))
-+        })
-+        await expect(page.locator("#root")).not.toHaveCSS("height", "500px")
-+        await page.setViewportSize({ width: 1440, height: 900 })
-+        await expect(keys).toBeVisible()
-+
-+        return
-+      }
-+
-+      await expect(keys).toHaveCount(0)
-+    })
-+  })
-+}
-+
- function legacyTerminalKey() {
-   const dir = base64Encode("C:/OpenCode/TerminalInput")
-   const head = dir.slice(0, 12).replace(/[^a-zA-Z0-9._-]/g, "-")
---- a/packages/gui-extensions/src/file/browser.tsx
-+++ b/packages/gui-extensions/src/file/browser.tsx
-@@ -20,6 +20,7 @@
- import { fileTabPath, isFileTab } from "./path"
- import FileTreeV2 from "./tree-v2"
- import { SessionFileView } from "./view"
-+import { createFileTreeRefresh } from "./refresh"
- 
- const emptyFiles: string[] = []
- 
-@@ -216,6 +217,7 @@
-   screen: SessionScreen
- }) {
-   const panel = usePanel()
-+  createFileTreeRefresh(props, () => panel.visible())
-   const shared = useShared()
-   const id = () => props.tab().id
-   const placeholder = () => !isFileTab(id())
---- a/packages/app/e2e/regression/side-panels.spec.ts
-+++ b/packages/app/e2e/regression/side-panels.spec.ts
-@@ -1,7 +1,42 @@
- import { expect, test, type Locator, type Page } from "@playwright/test"
- import { tabKey } from "../utils/app"
--import { fileDiff, openSession } from "../utils/workspace"
-+import { fileDiff, fileNode, openSession } from "../utils/workspace"
- import { expectSessionTitle } from "../utils/waits"
-+
-+test("returning to files refreshes listings; reopening a file rereads content but switching tabs uses cache", async ({
-+  page,
-+}) => {
-+  await page.setViewportSize({ width: 1440, height: 900 })
-+  const directory = "C:/OpenCode/FileReturn"
-+  const listing = ["first.ts"]
-+  const contentRequests: string[] = []
-+  const contents = new Map<string, string>()
-+  await openSession(page, {
-+    name: "FileReturn",
-+    fileList: (path) => (path ? [] : listing.map((name) => fileNode(directory, name))),
-+    fileContent: (path) => {
-+      contentRequests.push(path)
-+
-+      return { type: "text", content: contents.get(path) ?? `contents:${path}` }
-+    },
-+    seed: { panes: { ses_filereturn: { review: true } } },
-+  })
-+  const panel = page.locator("#review-panel")
-+  await panel.getByRole("button", { name: "Open file", exact: true }).click()
-+  await panel.getByRole("button", { name: "first.ts", exact: true }).click()
-+  await expect(panel.getByText("contents:first.ts", { exact: true })).toBeVisible()
-+  await panel.getByRole("tab", { name: "Review", exact: true }).click()
-+  listing.push("automatic.ts")
-+  contents.set("first.ts", "reopened:first.ts")
-+  const requestsBeforeReturn = contentRequests.length
-+  await panel.getByRole("tab", { name: "first.ts", exact: true }).click()
-+  await expect(panel.getByRole("button", { name: "automatic.ts", exact: true })).toBeEnabled()
-+  await expect(panel.getByText("contents:first.ts", { exact: true })).toBeVisible()
-+  expect(contentRequests).toHaveLength(requestsBeforeReturn)
-+  await panel.getByRole("button", { name: "Open file", exact: true }).click()
-+  await panel.getByRole("button", { name: "first.ts", exact: true }).click()
-+  await expect(panel.getByText("reopened:first.ts", { exact: true })).toBeVisible()
-+})
- 
- test("review and terminal follow the session tab and stay mounted", async ({ page }) => {
-   await page.setViewportSize({ width: 1440, height: 900 })
-@@ -321,6 +356,7 @@
- // Pauses each CSS transition as it starts, so a real toggle can be measured mid-motion.
- function holdTransitions(page: Page) {
-   return page.evaluate(() => {
-+    // SAFETY: this helper is the only writer of the optional e2eHold property and always uses this shape.
-     const host = window as Window & { e2eHold?: { active: boolean } }
- 
-     if (!host.e2eHold) {
-@@ -341,7 +377,10 @@
- 
- function releaseTransitions(page: Page) {
-   return page.evaluate(() => {
--    ;(window as Window & { e2eHold?: { active: boolean } }).e2eHold!.active = false
-+    // SAFETY: holdTransitions creates this property before releaseTransitions is called.
-+    const host = window as Window & { e2eHold?: { active: boolean } }
-+
-+    host.e2eHold!.active = false
-     document
-       .getAnimations()
-       .filter((item) => item instanceof CSSTransition && item.playState === "paused")
-@@ -359,7 +398,10 @@
-           (item) =>
-             item instanceof CSSTransition && item.playState === "paused" && item.transitionProperty === "height",
-         )
--        .map((item) => ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot")),
-+        .map((item) => {
-+          // SAFETY: CSS transitions use KeyframeEffect and these height transitions target DOM elements.
-+          return ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot")
-+        }),
-     )
- 
-   if (progress !== undefined) {
-@@ -371,9 +413,10 @@
-       .getAnimations()
-       .filter((item): item is CSSTransition => item instanceof CSSTransition && item.playState === "paused")
- 
--    const region = transitions.find(
--      (item) => ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot") === "session-side-region",
--    )
-+    const region = transitions.find((item) => {
-+      // SAFETY: CSS transitions use KeyframeEffect and these paused transitions target DOM elements.
-+      return ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot") === "session-side-region"
-+    })
- 
-     if (progress !== undefined) {
-       const time = Number(region!.effect!.getTiming().duration) * progress
-@@ -388,7 +431,10 @@
-     const content = box('[data-slot="terminal-panel-content"]')!
- 
-     return {
--      moving: transitions.map((item) => ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot")),
-+      moving: transitions.map((item) => {
-+        // SAFETY: CSS transitions use KeyframeEffect and these paused transitions target DOM elements.
-+        return ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot")
-+      }),
-       terminalRegion: terminalRegion.height,
-       terminalBottom: terminal.bottom,
-       anchor: Math.abs(terminal.top - content.top),
-@@ -414,6 +460,7 @@
-       const centers = await Promise.all(
-         [terminal.getByRole("button", { name: "New terminal", exact: true }), toggle].map((button) =>
-           button.locator("svg").evaluate((element) => {
-+            // SAFETY: the locator selects the button's root SVG element, which exposes getBBox and getScreenCTM.
-             const svg = element as SVGSVGElement
-             const path = svg.getBBox()
- 
---- a/packages/gui-extensions/src/file/renderer.tsx
-+++ b/packages/gui-extensions/src/file/renderer.tsx
-@@ -127,7 +127,7 @@
-     // to the first tab and reselects it.
-     layout.open(key(screen.file, path), session, options)
-     updateFilter(session.key, { browsing: false })
--    void screen.file.sync(path)
-+    void screen.file.sync(path, { force: true })
-   }
- 
-   const applySelection = (session: MountedSession, files: Files, path: string, selection: LineRange | undefined) => {
-@@ -314,7 +314,7 @@
-         return ctx.t("mobile.title")
-       },
-       order: 20,
--      kind: "menu",
-+      kind: "tab",
-       icon: "folder",
-     },
-     list(input) {
---- a/packages/app/src/session/timeline/virtualizer.tsx
-+++ b/packages/app/src/session/timeline/virtualizer.tsx
-@@ -188,6 +188,7 @@
-   let maxScroll = 0
-   let virtualContent: HTMLDivElement | undefined
-   let scrollTop = 0
-+  let reading: { offset: number; pinned: boolean } | undefined
-   let reportOffset: ((offset: number, scrolling: boolean) => void) | undefined
-   let reportRect: ((rect: { width: number; height: number }) => void) | undefined
-   let batchingColdSizes = false
-@@ -201,7 +202,19 @@
-       reportRect = callback
- 
-       return observeElementRect(instance, (rect) => {
--        if (active()) callback(rect)
-+        if (!active()) return
-+        // Android's keyboard resizes the scrollport, not its contents or composer.
-+        // Keep an already-following timeline at the end without moving history readers.
-+
-+        const follow =
-+          /Android/i.test(navigator.userAgent) &&
-+          input.pinned() &&
-+          instance.scrollRect !== null &&
-+          rect.height !== instance.scrollRect.height
-+
-+        callback(rect)
-+
-+        if (follow) instance.scrollToEnd()
-       })
-     },
-     // Route navigation detaches and reattaches the scroll element, which drops its offset.
-@@ -232,6 +245,8 @@
- 
-       return observeElementOffsetReconnectAware(instance, reportOffset, () => {
-         if (!active()) return
-+
-+        if (reading && !reading.pinned) input.onUnpin()
-         virtualContent?.querySelectorAll<HTMLDivElement>("[data-index]").forEach(virtualizer.measureElement)
- 
-         if (input.pinned()) virtualizer.scrollToEnd()
-@@ -490,6 +505,29 @@
- 
-   const virtualRowKeys = createMemo(() => virtualizer.getVirtualItems().map((item) => String(item.key)))
- 
-+  onMount(() => {
-+    // Capture before a navigation click detaches this cached timeline, including
-+    // writes whose native scroll event has not been delivered yet.
-+    const save = (event: MouseEvent) => {
-+      const root = listRoot()
-+
-+      if (
-+        !active() ||
-+        !root?.isConnected ||
-+        !(event.target instanceof Element) ||
-+        !event.target.closest('[data-slot="session-mobile-view-navigation"]')
-+      )
-+        return
-+      reading = {
-+        offset: Math.max(0, root.scrollTop + rendering.scrollAdjustment),
-+        pinned: input.pinned() && root.scrollHeight - root.clientHeight - root.scrollTop <= endEpsilon,
-+      }
-+    }
-+
-+    document.addEventListener("click", save, true)
-+    onCleanup(() => document.removeEventListener("click", save, true))
-+  })
-+
-   createEffect(() => {
-     if (!active()) return
-     const root = listRoot()
-@@ -507,7 +545,17 @@
-       const target = input.reveal?.target()
- 
-       if (target && revealPart(target)) input.reveal?.done()
--      else if (input.pinned()) virtualizer.scrollToEnd()
-+      else if (reading?.pinned ?? input.pinned()) virtualizer.scrollToEnd()
-+      else if (reading) {
-+        input.onUnpin()
-+        const offset = reading.offset
-+
-+        requestAnimationFrame(() => {
-+          if (!active() || !root.isConnected) return
-+          root.scrollTo({ top: offset, behavior: "instant" })
-+          reportOffset?.(root.scrollTop, false)
-+        })
-+      }
- 
-       reportOffset?.(root.scrollTop, false)
-       settleColdBottom()
---- a/packages/app/e2e/regression/mobile-timeline-scroll.spec.ts
-+++ b/packages/app/e2e/regression/mobile-timeline-scroll.spec.ts
-@@ -17,6 +17,62 @@
- // scrollport. Disable it so the visual assertion measures the supplied gesture.
- test.use({ colorScheme: "light", launchOptions: { args: ["--disable-features=ResamplingScrollEvents"] } })
- 
-+test.describe("keyboard viewport", () => {
-+  test.use({
-+    isMobile: true,
-+    hasTouch: true,
-+    userAgent: devices["Pixel 7"].userAgent,
-+    viewport: { width: 390, height: 844 },
-+  })
-+
-+  for (const following of [true, false]) {
-+    test(`viewport shrink ${following ? "keeps latest messages above the composer" : "preserves history reading position"}`, async ({
-+      page,
-+    }) => {
-+      const content = Array.from({ length: 60 }, (_, index) => `Keyboard viewport message ${index}.`).join("\n\n")
-+      await setupTimeline(page, {
-+        messages: [userMessage(), assistantMessage([textPart("prt_keyboard_viewport", content)])],
-+        viewport: { width: 390, height: 844 },
-+      })
-+
-+      const scroller = page
-+        .locator('[data-slot="session-timeline-scroll"]')
-+        .getByRole("region", { name: "scrollable content", exact: true })
-+
-+      const distance = () =>
-+        scroller.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)
-+
-+      await expect(page.getByText("Keyboard viewport message 59.", { exact: true })).toBeInViewport()
-+      await expect.poll(distance).toBeLessThanOrEqual(2)
-+      await page.getByRole("textbox", { name: "Prompt", exact: true }).focus()
-+
-+      if (!following) {
-+        await scroller.press("PageUp")
-+        await expect.poll(distance).toBeGreaterThan(200)
-+        await page.getByRole("textbox", { name: "Prompt", exact: true }).focus()
-+      }
-+
-+      const before = await scroller.evaluate((element) => ({ height: element.clientHeight, top: element.scrollTop }))
-+      // Android's resizes-content keyboard shrinks the layout viewport without changing its width.
-+      await page.setViewportSize({ width: 390, height: 500 })
-+      await expect.poll(() => scroller.evaluate((element) => element.clientHeight)).toBeLessThan(before.height)
-+
-+      if (following) {
-+        await expect.poll(distance).toBeLessThanOrEqual(2)
-+        await expect(page.getByText("Keyboard viewport message 59.", { exact: true })).toBeInViewport()
-+      } else {
-+        await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(before.top, 0)
-+      }
-+
-+      await page.setViewportSize({ width: 390, height: 844 })
-+      await expect.poll(() => scroller.evaluate((element) => element.clientHeight)).toBe(before.height)
-+
-+      if (following) await expect.poll(distance).toBeLessThanOrEqual(2)
-+      else await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(before.top, 0)
-+    })
-+  }
-+})
-+
- for (const device of ["Pixel 7", "iPhone 13"]) {
-   test.describe(device, () => {
-     // Chromium drives native touch input, including the virtualizer's iOS user-agent path.
-@@ -26,6 +82,57 @@
-       userAgent: devices[device].userAgent,
-       viewport: { width: 390, height: 844 },
-     })
-+
-+    if (device === "iPhone 13") {
-+      test("returning from another view preserves history reading position", async ({ page }) => {
-+        const content = Array.from({ length: 100 }, (_, index) => `View switch message ${index}.`).join("\n\n")
-+        await setupTimeline(page, {
-+          messages: [userMessage(), assistantMessage([textPart("prt_view_switch", content)])],
-+          viewport: { width: 390, height: 844 },
-+          fileList: () => [],
-+          pty: {},
-+        })
-+
-+        const scroller = page
-+          .locator('[data-slot="session-timeline-scroll"]')
-+          .getByRole("region", { name: "scrollable content", exact: true })
-+
-+        await expect(page.getByText("View switch message 99.", { exact: true })).toBeInViewport()
-+        await scroller.press("PageUp")
-+        await scroller.press("PageUp")
-+        const before = await scroller.evaluate((element) => element.scrollTop)
-+        const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
-+        await tabs.getByRole("tab", { name: "Changes", exact: true }).click()
-+        await tabs.getByRole("tab", { name: "Session", exact: true }).click()
-+        await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(before, 0)
-+
-+        // Leave in the same task as a native offset change, before its scroll event.
-+        const finalOffset = await scroller.evaluate((element) => {
-+          element.scrollTop = Math.max(0, element.scrollTop - 150)
-+          const top = element.scrollTop
-+          const tabs = document.querySelector('[data-slot="session-mobile-view-tabs"]')!
-+
-+          const changes = Array.from(tabs.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
-+            (button) => button.textContent?.trim() === "Changes",
-+          )!
-+
-+          changes.click()
-+
-+          return top
-+        })
-+
-+        await tabs.getByRole("tab", { name: "Changes", exact: true }).click()
-+        await tabs.getByRole("tab", { name: "Session", exact: true }).click()
-+        await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(finalOffset, 0)
-+
-+        for (const name of ["Files", "Terminal"]) {
-+          await tabs.getByRole("tab", { name, exact: true }).click()
-+          await expect(scroller).toBeHidden()
-+          await tabs.getByRole("tab", { name: "Session", exact: true }).click()
-+          await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeCloseTo(finalOffset, 0)
-+        }
-+      })
-+    }
- 
-     test("reversing a touch drag stops following streamed output", async ({ page }, testInfo) => {
-       const partID = "prt_mobile_stream"
---- a/packages/app/src/shell/titlebar/tab-strip.tsx
-+++ b/packages/app/src/shell/titlebar/tab-strip.tsx
-@@ -302,6 +302,10 @@
-     >
-       <div
-         data-slot={vertical() ? "vertical-tabs-scroll" : "titlebar-tabs-scroll"}
-+        on:touchmove={(event) => {
-+          // Keep the drawer's document-level scroll lock out of this native scrollport.
-+          if (vertical()) event.stopPropagation()
-+        }}
-         class="flex min-w-0 no-scrollbar [app-region:no-drag]"
-         classList={{
-           "flex-row items-center gap-1.5 overflow-x-auto": !vertical(),
-@@ -313,7 +317,10 @@
-             PointerSensor.configure({
-               activationConstraints: (event) =>
-                 event.pointerType === "touch"
--                  ? [new PointerActivationConstraints.Distance({ value: 8 })]
-+                  ? vertical()
-+                    // Let a swipe scroll; only a stationary hold starts reordering.
-+                    ? [new PointerActivationConstraints.Delay({ value: 350, tolerance: 8 })]
-+                    : [new PointerActivationConstraints.Distance({ value: 8 })]
-                   : [new PointerActivationConstraints.Distance({ value: 4 })],
-               preventActivation: (event) =>
-                 event.target instanceof Element &&
---- a/packages/app/e2e/regression/tabs.spec.ts
-+++ b/packages/app/e2e/regression/tabs.spec.ts
-@@ -134,6 +134,85 @@
-     await expect(page.locator('[data-slot="titlebar-tabs"]')).toHaveCount(0)
-   })
- }
-+
-+test.describe("mobile tab touch gestures", () => {
-+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 720 } })
-+
-+  test("swiping scrolls without reordering, while holding enables reordering", async ({ page }) => {
-+    const directory = "C:/OpenCode/Tabs"
-+    await mockWorkspace(page, {
-+      name: "Tabs",
-+      sessions: [a, b],
-+      seed: {
-+        tabs: [a.id, b.id, ...Array.from({ length: 24 }, (_, index) => ({ draft: `draft_touch_${index}`, directory }))],
-+      },
-+    })
-+    await page.goto(sessionHref(a.id))
-+    await page.getByRole("button", { name: "Tabs", exact: true }).click()
-+    const drawer = page.locator('[data-slot="mobile-tabs-drawer"]')
-+    const slots = drawer.locator("[data-titlebar-tab-slot]")
-+    const scroll = drawer.locator('[data-slot="vertical-tabs-scroll"]')
-+    await expect(slots).toHaveCount(26)
-+    const order = () => slots.evaluateAll((elements) => elements.map((element) => element.getAttribute("data-tab-key")))
-+    const initialOrder = await order()
-+    await expect.poll(() => scroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0)
-+    await page.waitForTimeout(400)
-+    // Simulate an outer modal scroll lock misclassifying an iOS standalone swipe.
-+    await page.evaluate(() => {
-+      document.documentElement.dataset.blockedTabMoves = "0"
-+      document.addEventListener("touchmove", (event) => {
-+        document.documentElement.dataset.blockedTabMoves = String(Number(document.documentElement.dataset.blockedTabMoves) + 1)
-+        event.preventDefault()
-+      }, { passive: false })
-+    })
-+
-+    const client = await page.context().newCDPSession(page)
-+
-+    const touch = (type: "touchStart" | "touchMove" | "touchEnd", x = 0, y = 0) =>
-+      client.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y }] })
-+
-+    const box = await slots.nth(3).boundingBox()
-+
-+    if (!box) throw new Error("tab has no bounding box")
-+    const x = box.x + box.width / 2
-+    const y = box.y + box.height / 2
-+    await touch("touchStart", x, y)
-+
-+    for (let offset = 20; offset <= 120; offset += 20) await touch("touchMove", x, y - offset)
-+    await touch("touchEnd")
-+    await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
-+    await expect(page.locator("html")).toHaveAttribute("data-blocked-tab-moves", "0")
-+    // Wait beyond the hold threshold to catch a timer that was not canceled by the swipe.
-+    await page.waitForTimeout(450)
-+    expect(await order()).toEqual(initialOrder)
-+    await expectPath(page, sessionHref(a.id))
-+
-+    // Start the hold on a fresh drawer, without residual native swipe momentum.
-+    await page.reload()
-+    await page.getByRole("button", { name: "Tabs", exact: true }).click()
-+    await expect(slots).toHaveCount(26)
-+    await page.waitForTimeout(400)
-+    await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBe(0)
-+    const first = await slots.first().boundingBox()
-+    const second = await slots.nth(1).boundingBox()
-+
-+    if (!first || !second) throw new Error("tabs have no bounding boxes")
-+    const holdX = first.x + first.width / 2
-+    const holdY = first.y + first.height / 2
-+    await touch("touchStart", holdX, holdY)
-+    // Hold past both the sorting threshold and the context menu's 700 ms timer.
-+    await page.waitForTimeout(900)
-+    await expect(page.getByRole("menu")).toHaveCount(0)
-+    await touch("touchMove", holdX, second.y + second.height / 2)
-+    await expect.poll(order).not.toEqual(initialOrder)
-+    await touch("touchEnd")
-+    await expect.poll(order).toEqual([initialOrder[1], initialOrder[0], ...initialOrder.slice(2)])
-+    await expectPath(page, sessionHref(a.id))
-+    await client.detach()
-+    await slots.first().locator("[data-titlebar-tab-link]").click({ button: "right" })
-+    await expect(page.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible()
-+  })
-+})
- 
- test("vertical tabs resize, scroll, show shortcut hints, and navigate", async ({ page }) => {
-   await page.setViewportSize({ width: 1280, height: 480 })
---- a/packages/app/src/shell/titlebar/tab-nav.tsx
-+++ b/packages/app/src/shell/titlebar/tab-nav.tsx
-@@ -41,6 +41,7 @@
-   const language = useLanguage()
-   const [menu, setMenu] = createStore({ open: false, rename: false })
-   const [editing, setEditing] = createSignal(false)
-+  const [suppressTouchMenu, setSuppressTouchMenu] = createSignal(false)
-   const [titleOverflowing, setTitleOverflowing] = createSignal(false)
-   let tabRoot!: HTMLDivElement
-   let titleEl!: HTMLSpanElement
-@@ -249,7 +250,13 @@
-       </Show>
-       <Menu.Context.Trigger
-         as="a"
--        disabled={editing() || props.dragging}
-+        disabled={editing() || props.dragging || suppressTouchMenu()}
-+        onPointerDown={(event) => {
-+          if (props.orientation !== "vertical" || event.pointerType !== "touch") return
-+          // Kobalte checks disabled after this handler; do not arm its long-press timer.
-+          setSuppressTouchMenu(true)
-+          queueMicrotask(() => setSuppressTouchMenu(false))
-+        }}
-         aria-haspopup="menu"
-         aria-expanded={menu.open}
-         data-slot="tab-link"
---- a/packages/app/src/runtime/extension/mobile.tsx
-+++ b/packages/app/src/runtime/extension/mobile.tsx
-@@ -79,12 +79,6 @@
- 
-   const drawer = createMemo(() => (store.drawer ? props.views.find(store.drawer) : undefined))
- 
--  const tab = createMemo(() =>
--    props.current === "session" || props.views.tabs().some((entry) => entry.key === props.current)
--      ? props.current
--      : "more",
--  )
--
-   let trigger: HTMLButtonElement | undefined
- 
-   return (
-@@ -93,7 +87,7 @@
-       classList={{ "before:top-0": props.bottom, "before:bottom-0": !props.bottom }}
-       data-slot="session-mobile-view-navigation"
-     >
--      <Tabs value={tab()} variant="line" class="!h-auto min-w-0 flex-1" data-slot="session-mobile-view-tabs">
-+      <Tabs value={props.current} variant="line" class="!h-auto min-w-0 flex-1" data-slot="session-mobile-view-tabs">
-         <Tabs.List aria-label={language.t("session.view.select")} class="!h-9 !gap-0 !px-0 before:!hidden">
-           <Tabs.Trigger
-             value="session"
-@@ -115,23 +109,24 @@
-               </Tabs.Trigger>
-             )}
-           </For>
--          <Show when={props.views.menu().length}>
--            <Tabs.Trigger
--              value="more"
--              ref={(element: HTMLButtonElement) => {
--                trigger = element
--              }}
--              class="min-w-0 flex-1"
--              classes={{ button: "w-full justify-center" }}
--              aria-haspopup="dialog"
--              aria-expanded={store.open}
--              onClick={() => setStore({ open: true, loaded: true, drawer: undefined })}
--            >
--              {language.t("session.tab.more")}
--            </Tabs.Trigger>
--          </Show>
-         </Tabs.List>
-       </Tabs>
-+      <Show when={props.views.menu().length}>
-+        <button
-+          type="button"
-+          ref={(element: HTMLButtonElement) => {
-+            trigger = element
-+          }}
-+          class="mx-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[4px] text-v2-text-text-base hover:bg-[var(--v2-overlay-simple-overlay-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
-+          aria-haspopup="dialog"
-+          aria-label={language.t("common.moreOptions")}
-+          aria-expanded={store.open}
-+          aria-pressed={store.open || props.views.menu().some((entry) => entry.key === props.current)}
-+          onClick={() => setStore({ open: true, loaded: true, drawer: undefined })}
-+        >
-+          …
-+        </button>
-+      </Show>
-       <Show when={store.loaded}>
-         <Suspense>
-           <MobilePanelDrawer
---- a/packages/gui-extensions/src/terminal/renderer.tsx
-+++ b/packages/gui-extensions/src/terminal/renderer.tsx
-@@ -149,7 +149,7 @@
-         return ctx.t("tab.title")
-       },
-       order: 30,
--      kind: "menu",
-+      kind: "tab",
-       icon: "terminal",
-     },
-     list: () => [tab],
---- a/packages/app/e2e/regression/mobile-session-options.spec.ts
-+++ b/packages/app/e2e/regression/mobile-session-options.spec.ts
-@@ -7,14 +7,24 @@
-   for (const direction of ["ltr", "rtl"] as const) {
-     test(`mobile session options are compact and readable in ${scheme} ${direction}`, async ({ page }, testInfo) => {
-       await page.setViewportSize({ width: 390, height: 844 })
--      await mockStressTimeline(page)
-+      await mockStressTimeline(page, { fileList: () => [] })
-       await page.addInitScript((scheme) => {
-         localStorage.setItem("opencode-color-scheme", scheme)
-         localStorage.setItem("settings.v3", JSON.stringify({ general: { mobileTitlebarPosition: "bottom" } }))
-       }, scheme)
-       await openWithDirection(page, sessionHref(fixture.targetID), direction)
-       const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
--      const more = tabs.getByRole("tab", { name: "More...", exact: true })
-+
-+      const more = page
-+        .locator('[data-slot="session-mobile-view-navigation"]')
-+        .getByRole("button", { name: "More options", exact: true })
-+
-+      await expect(tabs.getByRole("tab")).toHaveText(["Session", "Changes", "Files", "Terminal"])
-+      await expect(more).toHaveText("…")
-+      await expect(more).toHaveCSS("width", "32px")
-+      await tabs.getByRole("tab", { name: "Files", exact: true }).click()
-+      await expect(tabs.getByRole("tab", { selected: true })).toHaveText("Files")
-+      await tabs.getByRole("tab", { name: "Session", exact: true }).click()
-       await expect(tabs.getByRole("tab", { selected: true })).toHaveText("Session")
-       await more.click()
-       const drawer = page.getByRole("dialog", { name: "More options", exact: true })
-@@ -36,7 +46,11 @@
-       await drawer.screenshot({ path: testInfo.outputPath("options.png") })
-       await testInfo.attach("options", { path: testInfo.outputPath("options.png"), contentType: "image/png" })
- 
--      for (const name of ["Files", "Terminal", "Usage", "Session details"]) {
-+      for (const name of ["Files", "Terminal"]) {
-+        await expect(drawer.getByRole("button", { name, exact: true })).toHaveCount(0)
-+      }
-+
-+      for (const name of ["Usage", "Session details"]) {
-         const option = drawer.getByRole("button", { name, exact: true })
-         await expect(option).toHaveCSS("height", "44px")
-         await expect
---- a/packages/app/e2e/regression/mobile-session.spec.ts
-+++ b/packages/app/e2e/regression/mobile-session.spec.ts
-@@ -28,7 +28,7 @@
- 
-     const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
-     const navigation = page.locator('[data-slot="session-mobile-view-navigation"]')
--    const more = tabs.getByRole("tab", { name: "More...", exact: true })
-+    const more = navigation.getByRole("button", { name: "More options", exact: true })
-     const views = page.getByRole("dialog", { name: "More options", exact: true })
-     const picker = tabs.getByRole("tab", { selected: true })
- 
-@@ -41,7 +41,7 @@
-     await expect(navigation).toHaveCount(1)
-     await expect(message).toBeVisible()
-     await expect(composer).toBeVisible()
--    await expect(tabs.getByRole("tab")).toHaveText(["Session", "Changes", "More..."])
-+    await expect(tabs.getByRole("tab")).toHaveText(["Session", "Changes", "Files", "Terminal"])
-     await expect(tabs).toHaveCSS("padding-left", "0px")
-     await expect(tabs).toHaveCSS("padding-right", "0px")
- 
-@@ -93,7 +93,7 @@
-     await expect(views).toBeVisible()
-     await expect(more).toHaveAttribute("aria-expanded", "true")
- 
--    for (const name of ["Files", "Terminal", "Usage", "Session details"])
-+    for (const name of ["Usage", "Session details"])
-       await expect(views.getByRole("button", { name, exact: true })).toBeVisible()
-     await expect(views).not.toHaveAttribute("data-transitioning")
-     await page.keyboard.press("Escape")
-@@ -104,7 +104,8 @@
-     await more.press("Enter")
-     await views.getByRole("button", { name: "Usage", exact: true }).click()
-     await expect(views).toBeHidden()
--    await expect(picker).toHaveText("More...")
-+    await expect(picker).toHaveCount(0)
-+    await expect(more).toHaveAttribute("aria-pressed", "true")
-     await expect(page.getByText("Total Cost", { exact: true })).toBeVisible()
-     const usage = page.locator('[data-slot="session-usage-content"]')
-     await expect(usage).toHaveCSS("padding-top", "16px")
-@@ -153,17 +154,13 @@
-     await expect(picker).toHaveText("Changes")
-     await expect(page.getByText("No uncommitted changes yet", { exact: true })).toBeVisible()
- 
--    await more.click()
--    await views.getByRole("button", { name: "Files", exact: true }).click()
--    await expect(views).toBeHidden()
--    await expect(picker).toHaveText("More...")
-+    await tabs.getByRole("tab", { name: "Files", exact: true }).click()
-+    await expect(picker).toHaveText("Files")
-     await expect(page.getByRole("combobox", { name: "Filter files", exact: true })).toBeVisible()
-     await expect(composer).toBeHidden()
- 
--    await more.click()
--    await expect(views.getByRole("button", { name: "Files", exact: true })).toHaveAttribute("aria-pressed", "true")
--    await views.getByRole("button", { name: "Terminal", exact: true }).click()
--    await expect(views).toBeHidden()
-+    await tabs.getByRole("tab", { name: "Terminal", exact: true }).click()
-+    await expect(picker).toHaveText("Terminal")
-     const panel = page.locator("#terminal-panel")
-     await expect(panel).toHaveAttribute("data-opened", "true")
-     await expect(panel.getByRole("tab", { name: /Terminal 1/ })).toBeVisible()
-@@ -180,14 +177,14 @@
-     await expect(panel).toHaveAttribute("data-cache-probe", "original")
- 
-     await page.keyboard.press("Control+Backquote")
--    await expect(picker).toHaveText("More...")
-+    await expect(picker).toHaveText("Terminal")
-     await expect(panel).toBeVisible()
-     await expect(panel).toHaveAttribute("data-cache-probe", "original")
-     await page.keyboard.press("Control+Backquote")
-     await expect(picker).toHaveText("Session")
- 
-     await page.keyboard.press("Control+Backquote")
--    await expect(picker).toHaveText("More...")
-+    await expect(picker).toHaveText("Terminal")
-     await panel.getByRole("button", { name: "Close terminal", exact: true }).click()
-     await expect(picker).toHaveText("Session")
-     await expect(panel).toBeHidden()
-@@ -212,16 +209,14 @@
-     await expect(page.getByText("Total Cost", { exact: true })).toBeVisible()
-     await openTab(fixture.expected.sourceTitle)
-     await expect(picker).toHaveText("Session")
--    await more.click()
--    await views.getByRole("button", { name: "Files", exact: true }).click()
--    await expect(picker).toHaveText("More...")
-+    await tabs.getByRole("tab", { name: "Files", exact: true }).click()
-+    await expect(picker).toHaveText("Files")
-     await openTab(fixture.expected.targetTitle)
-     await expect(picker).toHaveText("Session")
-     await openTab(fixture.expected.sourceTitle)
-     await expect(picker).toHaveText("Session")
--    await more.click()
--    await views.getByRole("button", { name: "Files", exact: true }).click()
--    await expect(picker).toHaveText("More...")
-+    await tabs.getByRole("tab", { name: "Files", exact: true }).click()
-+    await expect(picker).toHaveText("Files")
-     await openTabs()
-     await drawer.getByRole("button", { name: "Home", exact: true }).click()
-     await expect(page).toHaveURL("/")
-@@ -256,15 +251,18 @@
-   await page.setViewportSize({ width: 390, height: 844 })
-   const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
-   const details = page.getByRole("dialog", { name: "Session details", exact: true })
--  const more = tabs.getByRole("tab", { name: "More...", exact: true })
-+
-+  const more = page
-+    .locator('[data-slot="session-mobile-view-navigation"]')
-+    .getByRole("button", { name: "More options", exact: true })
-+
-   const views = page.getByRole("dialog", { name: "More options", exact: true })
-   await more.click()
-   await views.getByRole("button", { name: "Session details", exact: true }).click()
-   await details.getByRole("button", { name: "No changes", exact: true }).click()
-   await expect(details).toBeHidden()
-   await expect(tabs.getByRole("tab", { selected: true })).toHaveText("Changes")
--  await more.click()
--  await views.getByRole("button", { name: "Files", exact: true }).click()
-+  await tabs.getByRole("tab", { name: "Files", exact: true }).click()
-   await expect(
-     page.getByRole("tablist", { name: "Open files", exact: true }).getByRole("tab", { name: "README.md", exact: true }),
-   ).toHaveAttribute("aria-selected", "true")
-@@ -280,8 +278,7 @@
-   await page.reload()
-   await expect(launcher).toHaveAttribute("aria-selected", "true")
-   await page.setViewportSize({ width: 390, height: 844 })
--  await more.click()
--  await views.getByRole("button", { name: "Files", exact: true }).click()
-+  await tabs.getByRole("tab", { name: "Files", exact: true }).click()
-   const files = page.locator('[data-slot="session-mobile-files"]')
-   await files.getByRole("button", { name: "README.md", exact: true }).click()
-   await expect(files.getByText("contents:README.md", { exact: true })).toBeVisible()
-@@ -305,17 +302,14 @@
- 
-   const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
-   const terminal = page.locator("#terminal-panel")
--  const views = page.getByRole("dialog", { name: "More options", exact: true })
--  await tabs.getByRole("tab", { name: "More...", exact: true }).click()
--  await views.getByRole("button", { name: "Terminal", exact: true }).click()
--  await expect(views).toBeHidden()
-+  await tabs.getByRole("tab", { name: "Terminal", exact: true }).click()
-   await expect(terminal.locator("textarea")).toBeEditable()
-   await page.keyboard.press("ControlOrMeta+p")
-   const dialog = page.getByRole("dialog")
-   await dialog.getByRole("textbox").fill("README")
-   await dialog.getByRole("option", { name: "/ README.md", exact: true }).click()
-   await expect(dialog).toHaveCount(0)
--  await expect(tabs.getByRole("tab", { selected: true })).toHaveText("More...")
-+  await expect(tabs.getByRole("tab", { selected: true })).toHaveText("Terminal")
-   await expect(terminal).toHaveAttribute("data-opened", "true")
- 
-   await page.setViewportSize({ width: 1280, height: 900 })
---- a/packages/app/e2e/regression/mobile-extension-drawers.spec.ts
-+++ b/packages/app/e2e/regression/mobile-extension-drawers.spec.ts
-@@ -18,7 +18,11 @@
-       })
-       await openWithDirection(page, sessionHref(fixture.targetID), direction)
-       const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
--      const more = tabs.getByRole("tab", { name: "More...", exact: true })
-+
-+      const more = page
-+        .locator('[data-slot="session-mobile-view-navigation"]')
-+        .getByRole("button", { name: "More options", exact: true })
-+
-       await expect(tabs.getByRole("tab", { selected: true })).toHaveText("Session")
-       await more.click()
-       await page
-@@ -152,7 +156,10 @@
-   await openWithDirection(page, sessionHref(fixture.targetID), "ltr")
-   const tabs = page.getByRole("tablist", { name: "Session view", exact: true })
-   await expect(tabs.getByRole("tab", { selected: true })).toHaveText("Session")
--  await tabs.getByRole("tab", { name: "More...", exact: true }).click()
-+  await page
-+    .locator('[data-slot="session-mobile-view-navigation"]')
-+    .getByRole("button", { name: "More options", exact: true })
-+    .click()
-   await page
-     .getByRole("dialog", { name: "More options", exact: true })
-     .getByRole("button", { name: "Session details", exact: true })
---- a/packages/app/src/session/screen.tsx
-+++ b/packages/app/src/session/screen.tsx
-@@ -198,6 +198,43 @@
-   })
- 
-   const conversationVisible = createMemo(() => isDesktop() || mobileView() === "session")
-+
-+  // iOS keyboards shrink the visual viewport without resizing the layout viewport.
-+  // Limit this override to the visible mobile dock; chat keeps its existing scroll behavior.
-+  createEffect(() => {
-+    const viewport = window.visualViewport
-+    const root = document.getElementById("root")
-+
-+    const ios =
-+      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
-+
-+    if (!ios || !viewport || !root || isDesktop() || mobileEntry()?.provider.region !== "dock") return
-+
-+    const height = root.style.height
-+    const transform = root.style.transform
-+
-+    const restore = () => {
-+      root.style.height = height
-+      root.style.transform = transform
-+    }
-+
-+    const sync = () => {
-+      if (viewport.scale !== 1 || window.innerHeight - viewport.height < 100) return restore()
-+
-+      root.style.height = `${viewport.height}px`
-+      root.style.transform = `translateY(${viewport.offsetTop}px)`
-+    }
-+
-+    viewport.addEventListener("resize", sync)
-+    viewport.addEventListener("scroll", sync)
-+    sync()
-+    onCleanup(() => {
-+      viewport.removeEventListener("resize", sync)
-+      viewport.removeEventListener("scroll", sync)
-+      restore()
-+    })
-+  })
-   createEffect(() => {
-     if (!isDesktop() && screen.dock.open()) setStore("mobileDockCached", true)
-   })

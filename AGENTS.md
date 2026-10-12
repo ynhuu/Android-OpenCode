@@ -18,6 +18,16 @@
 - Keep user-facing installation/build information in `README.md`, agent rules here, and frontend customization details in `docs/frontend/`. Do not edit the frontend patch merely to change documentation.
 - Use portable paths and distinguish recorded verification results from checks performed in the current task.
 
+## Upstream OpenCode frontend rules
+
+- Before editing or reviewing frontend source, tests, or the complete patch, read the target OpenCode version's root `AGENTS.md` and every applicable nested `AGENTS.md`, especially `packages/app/`, `packages/app/e2e/`, and `packages/gui-extensions/`. This Android repository's rules do not replace upstream coding rules; reread them when migrating versions rather than relying on a copied summary.
+- Prioritize stability, then simplicity, then performance. Preserve existing ownership, interfaces, and lifecycle handling; prefer the smallest localized change. Do not introduce cross-component callback chains, extra state, or abstractions merely to make a test pass. Explain concrete failures and complexity costs before expanding the requested scope.
+- Follow upstream formatting, naming, typing, localization, Solid reactivity, extension boundaries, and cleanup rules. Avoid unrelated formatting churn; retain spacing required by upstream lint and unified-diff context markers required for patch application.
+- Before changing session or timeline code, record a production benchmark baseline and compare it afterward. Keep measurements and logs in ignored local storage, not in the migration guide; do not infer a performance guarantee from a single run.
+- Follow upstream E2E required reading and test ownership. Extend existing keeper suites, demonstrate that regression tests fail before the fix, use real input and observable readiness, and use controlled clocks for timer behavior. Do not use fixed sleeps, frame counts, weaker assertions, or retries to hide failures.
+- Run the target version's canonical checks and relevant package checks. Every patched TypeScript file must pass upstream formatting and lint, including warnings. Report missing dependencies and unrelated upstream failures explicitly; do not describe focused checks as full-repository verification.
+- Regenerate the complete patch from the customized source against the official archive, with file sections ordered by path. Verify application on freshly extracted source and byte-for-byte agreement with the customized files, then update the guide's checksum. Do not hand-edit patch hunks to hide source changes or remove required context.
+
 ## Frontend guide maintenance
 
 - Keep `docs/frontend/前端修改与迁移指南.md` focused on the current patch baseline and checksum, customized behavior, source locations, migration constraints, build commands, and acceptance checklist.
