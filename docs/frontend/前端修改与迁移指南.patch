@@ -966,7 +966,7 @@
  }
 --- a/packages/app/e2e/regression/terminal-input.spec.ts
 +++ b/packages/app/e2e/regression/terminal-input.spec.ts
-@@ -182,6 +182,215 @@
+@@ -182,6 +182,230 @@
    )
  })
  
@@ -1168,6 +1168,21 @@
 +
 +      if (device.visible) {
 +        await expect(keys).toBeVisible()
++        await page.evaluate(() => {
++          const viewport = window.visualViewport!
++          Object.defineProperty(viewport, "height", { configurable: true, value: 500 })
++          Object.defineProperty(viewport, "offsetTop", { configurable: true, value: 40 })
++          viewport.dispatchEvent(new Event("resize"))
++        })
++        await expect(page.locator("#root")).toHaveCSS("height", "500px")
++        await expect(keys).toBeInViewport({ ratio: 1 })
++        await page.evaluate(() => {
++          const viewport = window.visualViewport!
++          delete (viewport as unknown as Record<string, unknown>).height
++          delete (viewport as unknown as Record<string, unknown>).offsetTop
++          viewport.dispatchEvent(new Event("resize"))
++        })
++        await expect(page.locator("#root")).not.toHaveCSS("height", "500px")
 +        await page.setViewportSize({ width: 1440, height: 900 })
 +        await expect(keys).toBeVisible()
 +
@@ -1853,3 +1868,46 @@
    await page
      .getByRole("dialog", { name: "More options", exact: true })
      .getByRole("button", { name: "Session details", exact: true })
+--- a/packages/app/src/session/screen.tsx
++++ b/packages/app/src/session/screen.tsx
+@@ -198,6 +198,40 @@
+   })
+ 
+   const conversationVisible = createMemo(() => isDesktop() || mobileView() === "session")
++
++  // iOS keyboards shrink the visual viewport without resizing the layout viewport.
++  // Limit this override to the visible mobile dock; chat keeps its existing scroll behavior.
++  createEffect(() => {
++    const viewport = window.visualViewport
++    const root = document.getElementById("root")
++    const ios =
++      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
++      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
++
++    if (!ios || !viewport || !root || isDesktop() || mobileEntry()?.provider.region !== "dock") return
++
++    const height = root.style.height
++    const transform = root.style.transform
++    const restore = () => {
++      root.style.height = height
++      root.style.transform = transform
++    }
++    const sync = () => {
++      if (viewport.scale !== 1 || window.innerHeight - viewport.height < 100) return restore()
++
++      root.style.height = `${viewport.height}px`
++      root.style.transform = `translateY(${viewport.offsetTop}px)`
++    }
++
++    viewport.addEventListener("resize", sync)
++    viewport.addEventListener("scroll", sync)
++    sync()
++    onCleanup(() => {
++      viewport.removeEventListener("resize", sync)
++      viewport.removeEventListener("scroll", sync)
++      restore()
++    })
++  })
+   createEffect(() => {
+     if (!isDesktop() && screen.dock.open()) setStore("mobileDockCached", true)
+   })
