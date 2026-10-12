@@ -25,6 +25,16 @@ APK 不内置 Web 前端。首次启动时，应用从本仓库的 GitHub Releas
 
 覆盖安装需使用同一签名的新版本。卸载或清除应用数据会删除连接、主题和已下载的前端。使用 debug 签名的测试包仅供测试。
 
+### iOS／iPadOS 使用方式
+
+iPhone 和 iPad 无需安装 APK，可使用网站前端：
+
+1. 在 **Safari** 中打开 [opencode.olonet.cn](http://opencode.olonet.cn)。
+2. 添加手机可访问的 OpenCode 后端地址并连接；网站仅提供前端，不提供公共后端，手机上的 `localhost` 也不是电脑。
+3. 如需独立窗口使用，点击 Safari 的「分享」→「添加到主屏幕」，再从主屏幕图标打开。若系统显示「作为 Web App 打开」选项，可启用。
+
+**安全提示**：当前入口使用 HTTP，不保证离线缓存或其他需要安全上下文的功能；不要通过不可信网络传输敏感凭据或内容。
+
 ### 版本说明
 
 实际发布版本以 [Release 页面](https://github.com/ynhuu/Android-OpenCode/releases) 为准，不一定与当前源码一致。
