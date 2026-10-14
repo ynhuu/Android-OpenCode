@@ -715,11 +715,10 @@
  
 --- a/packages/app/e2e/regression/tabs.spec.ts
 +++ b/packages/app/e2e/regression/tabs.spec.ts
-@@ -134,6 +134,102 @@
-     await expect(page.locator('[data-slot="titlebar-tabs"]')).toHaveCount(0)
-   })
- }
-+
+@@ -269,6 +269,102 @@
+   await expect(tabB.locator('[data-slot="tab-avatar-unread-dot"]')).toHaveCount(0)
+ })
+ 
 +test.describe("mobile tab touch gestures", () => {
 +  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 720 } })
 +
@@ -815,12 +814,13 @@
 +    await expect(page.getByRole("menuitem", { name: "Rename", exact: true })).toBeVisible()
 +  })
 +})
- 
++
  test("vertical tabs resize, scroll, show shortcut hints, and navigate", async ({ page }) => {
    await page.setViewportSize({ width: 1280, height: 480 })
+   const directory = "C:/OpenCode/Tabs"
 --- a/packages/app/e2e/regression/terminal-input.spec.ts
 +++ b/packages/app/e2e/regression/terminal-input.spec.ts
-@@ -199,6 +199,234 @@
+@@ -199,6 +199,244 @@
    )
  })
  
@@ -984,6 +984,16 @@
 +    await expect(ctrl).toHaveAttribute("aria-pressed", "false")
 +    await page.keyboard.insertText("x")
 +    sent.push("x")
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
++    await ctrl.tap()
++    await expect(ctrl).toHaveAttribute("aria-pressed", "true")
++    await expect(terminal.locator("textarea")).toBeFocused()
++    await keys.getByRole("button", { name: "Hide keyboard", exact: true }).tap()
++    await expect(terminal.locator("textarea")).not.toBeFocused()
++    await expect(ctrl).toHaveAttribute("aria-pressed", "false")
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
++    await keys.getByRole("button", { name: "Hide keyboard", exact: true }).tap()
++    await expect(terminal.locator("textarea")).not.toBeFocused()
 +    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
 +    await page.setViewportSize({ width: 1440, height: 900 })
 +    await expect(keys).toBeVisible()
@@ -1508,7 +1518,7 @@
        settleColdBottom()
 --- a/packages/app/src/shell/titlebar/tab-nav.tsx
 +++ b/packages/app/src/shell/titlebar/tab-nav.tsx
-@@ -41,6 +41,7 @@
+@@ -42,6 +42,7 @@
    const language = useLanguage()
    const [menu, setMenu] = createStore({ open: false, rename: false })
    const [editing, setEditing] = createSignal(false)
@@ -1516,7 +1526,7 @@
    const [titleOverflowing, setTitleOverflowing] = createSignal(false)
    let tabRoot!: HTMLDivElement
    let titleEl!: HTMLSpanElement
-@@ -249,7 +250,13 @@
+@@ -259,7 +260,13 @@
        </Show>
        <Menu.Context.Trigger
          as="a"
@@ -1709,6 +1719,16 @@
        icon: "folder",
      },
      list(input) {
+@@ -643,8 +643,7 @@
+ 
+     const id = focused.get(screen)
+ 
+-    if (id && active(session, id))
+-      void screen.file.sync(fileTabPath(screen.file, id), { force: true, silent: true })
++    if (id && active(session, id)) void screen.file.sync(fileTabPath(screen.file, id), { force: true, silent: true })
+   })
+ }
+ 
 --- a/packages/gui-extensions/src/file/sidebar.tsx
 +++ b/packages/gui-extensions/src/file/sidebar.tsx
 @@ -4,6 +4,7 @@
@@ -1729,11 +1749,12 @@
    const diffFiles = createMemo(() => (changes()?.diffs(props.session) ?? []).map((diff) => diff.file))
 --- a/packages/gui-extensions/src/terminal/i18n/en.ts
 +++ b/packages/gui-extensions/src/terminal/i18n/en.ts
-@@ -10,4 +10,13 @@
+@@ -10,4 +10,14 @@
    "connectionLost.abnormalClose": "WebSocket closed abnormally: {{code}}",
    "connectionLost.description": "The terminal connection was interrupted. This can happen when the server restarts.",
    "tab.title": "Terminal",
 +  "keys.title": "Terminal keys",
++  "keys.hideKeyboard": "Hide keyboard",
 +  "keys.up": "Up arrow",
 +  "keys.down": "Down arrow",
 +  "keys.left": "Left arrow",
@@ -1756,7 +1777,7 @@
      list: () => [tab],
 --- a/packages/gui-extensions/src/terminal/terminal.tsx
 +++ b/packages/gui-extensions/src/terminal/terminal.tsx
-@@ -7,7 +7,9 @@
+@@ -7,7 +7,10 @@
  import { createPtyClient } from "@opencode/client/solid"
  import type { FitAddon, Terminal as Term } from "ghostty-web"
  import { Option, Predicate, Schema } from "effect"
@@ -1764,10 +1785,11 @@
 +import { type ComponentProps, createMemo, For, onCleanup, onMount, Show, splitProps } from "solid-js"
 +import { createStore } from "solid-js/store"
 +import { Button } from "@opencode/ui/button"
++import { Icon } from "@opencode/ui/icon"
  import { createKeyed, useExtension, type ServerRef } from "../sdk"
  import type { TerminalModel } from "./model"
  import type { LocalPTY } from "./state"
-@@ -91,6 +93,7 @@
+@@ -91,6 +94,7 @@
  const useTerminalUiBindings = (input: {
    container: HTMLDivElement
    term: Term
@@ -1775,7 +1797,7 @@
    cleanups: VoidFunction[]
    handlePointerDown: () => void
    handleLinkClick: (event: MouseEvent) => void
-@@ -133,8 +136,20 @@
+@@ -133,8 +137,20 @@
    input.container.addEventListener("paste", handlePaste, true)
    input.cleanups.push(() => input.container.removeEventListener("paste", handlePaste, true))
  
@@ -1798,7 +1820,7 @@
  
    input.container.addEventListener("click", input.handleLinkClick, {
      capture: true,
-@@ -149,6 +164,84 @@
+@@ -149,6 +165,84 @@
    input.term.textarea?.addEventListener("blur", handleTextareaBlur)
    input.cleanups.push(() => input.term.textarea?.removeEventListener("focus", handleTextareaFocus))
    input.cleanups.push(() => input.term.textarea?.removeEventListener("blur", handleTextareaBlur))
@@ -1883,7 +1905,7 @@
  }
  
  const persistTerminal = (input: {
-@@ -186,6 +279,13 @@
+@@ -186,6 +280,13 @@
    const keybinds = extension.keybinds
    const system = extension.system
    const desktop = extension.desktop
@@ -1897,7 +1919,7 @@
    const theme = useTheme()
    let container!: HTMLDivElement
  
-@@ -402,6 +502,11 @@
+@@ -402,6 +503,11 @@
      }
  
      focusTerminal()
@@ -1909,7 +1931,7 @@
    }
  
    const handleLinkClick = (event: MouseEvent) => {
-@@ -497,6 +602,7 @@
+@@ -497,6 +603,7 @@
        useTerminalUiBindings({
          container,
          term: t,
@@ -1917,7 +1939,7 @@
          cleanups,
          handlePointerDown,
          handleLinkClick,
-@@ -534,10 +640,20 @@
+@@ -534,10 +641,20 @@
        cleanups.push(() => disposeIfDisposable(onResize))
  
        const onData = t.onData((data) => {
@@ -1939,7 +1961,7 @@
  
        const onKey = t.onKey((key) => {
          if (key.key == "Enter") {
-@@ -663,10 +779,12 @@
+@@ -663,10 +780,12 @@
          }
  
          ws = socket
@@ -1952,7 +1974,7 @@
            local.onConnect?.()
            scheduleSize(t.cols, t.rows)
  
-@@ -720,7 +838,11 @@
+@@ -720,7 +839,11 @@
            socket.removeEventListener("error", handleError)
            socket.removeEventListener("close", handleClose)
  
@@ -1965,7 +1987,7 @@
  
            if (drop === stop) drop = undefined
  
-@@ -728,7 +850,11 @@
+@@ -728,7 +851,11 @@
          }
  
          const handleClose = (event: CloseEvent) => {
@@ -1978,7 +2000,7 @@
  
            if (drop === stop) drop = undefined
            socket.removeEventListener("open", handleOpen)
-@@ -790,20 +916,76 @@
+@@ -790,20 +917,89 @@
    })
  
    return (
@@ -2022,6 +2044,7 @@
 +        >
 +          <For
 +            each={[
++              { label: "", aria: "keys.hideKeyboard" },
 +              { label: "Esc", input: "\x1b" },
 +              { label: "Tab", input: "\t" },
 +              { label: "Ctrl" },
@@ -2045,12 +2068,19 @@
 +                class="!h-9 shrink-0 min-w-9 px-2 touch-manipulation [&[data-variant=ghost]:not(:active)]:!bg-transparent"
 +                aria-label={key.aria ? extension.t(key.aria) : key.label}
 +                aria-pressed={key.label === "Ctrl" ? keys.ctrl : undefined}
-+                disabled={!keys.connected}
++                disabled={key.aria !== "keys.hideKeyboard" && !keys.connected}
 +                onPointerDown={(event: PointerEvent) => {
 +                  // Keep the terminal textarea focused so tapping a key does not dismiss the mobile keyboard.
 +                  event.preventDefault()
 +                }}
 +                onClick={() => {
++                  if (key.aria === "keys.hideKeyboard") {
++                    setKeys("ctrl", false)
++                    term?.textarea?.blur()
++
++                    return
++                  }
++
 +                  if (key.label === "Ctrl") {
 +                    setKeys("ctrl", !keys.ctrl)
 +                    focusTerminal()
@@ -2061,7 +2091,12 @@
 +                  sendKey(key.arrow ? `\x1b${term?.getMode(1) ? "O" : "["}${key.arrow}` : (key.input ?? ""))
 +                }}
 +              >
-+                {key.label.replace(/^Ctrl\+/, "⌃")}
++                <Show when={key.aria === "keys.hideKeyboard"} fallback={key.label.replace(/^Ctrl\+/, "⌃")}>
++                  <span class="flex items-center" aria-hidden="true">
++                    <Icon name="keyboard" />
++                    <Icon name="chevron-down" size="small" />
++                  </span>
++                </Show>
 +              </Button>
 +            )}
 +          </For>
