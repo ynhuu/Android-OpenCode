@@ -820,7 +820,7 @@
    const directory = "C:/OpenCode/Tabs"
 --- a/packages/app/e2e/regression/terminal-input.spec.ts
 +++ b/packages/app/e2e/regression/terminal-input.spec.ts
-@@ -199,6 +199,244 @@
+@@ -199,6 +199,299 @@
    )
  })
  
@@ -908,6 +908,54 @@
 +    await client.detach()
 +  })
 +
++  test("selecting terminal output exposes real selectable text without affecting PTY input", async ({ page }) => {
++    const { pty } = await openSession(page, workspace)
++    await page
++      .getByRole("tablist", { name: "Session view", exact: true })
++      .getByRole("tab", { name: "Terminal", exact: true })
++      .tap()
++    const terminal = page.locator('[data-component="terminal"]')
++    const textarea = terminal.locator("textarea")
++    await expect(textarea).toHaveCount(1)
++    await expect.poll(() => pty.sockets.length).toBe(1)
++    pty.send("\x1b[2J\x1b[Hcopy-this-line\r\nsecond-line\x1b[6n")
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toMatch(/\x1b\[\d+;\d+R$/)
++    await expect(terminal).toHaveCSS("opacity", "1")
++    const sent = pty.sockets[0]!.input.join("")
++    await textarea.blur()
++    expect(
++      await terminal.locator("canvas").evaluate((element) => {
++        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true })
++        element.dispatchEvent(event)
++
++        return event.defaultPrevented
++      }),
++    ).toBe(false)
++    await expect(textarea).toBeFocused()
++    const select = page.getByRole("group", { name: "Terminal keys" }).getByRole("button", { name: "Select text" })
++    await expect(select.locator("svg use")).toHaveAttribute("href", "#opencode-v2-icon-select-element")
++    await select.tap()
++    const dialog = page.getByRole("dialog", { name: "Select text" })
++    await expect(dialog.locator("pre")).toContainText("copy-this-line\nsecond-line")
++    expect(
++      await dialog.locator("pre").evaluate((element) => {
++        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true })
++        element.dispatchEvent(event)
++
++        return event.defaultPrevented
++      }),
++    ).toBe(false)
++    await expect(textarea).not.toBeFocused()
++    await dialog.locator("pre").selectText()
++    await expect
++      .poll(() => page.evaluate(() => window.getSelection()?.toString()))
++      .toContain("copy-this-line\nsecond-line")
++    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent)
++    await dialog.getByRole("button", { name: "Close" }).tap()
++    await expect(dialog).toHaveCount(0)
++    await expect(terminal).toHaveCSS("opacity", "1")
++  })
++
 +  test("auxiliary keys preserve focus while Ctrl opens input and releases after one letter", async ({ page }) => {
 +    const { pty } = await openSession(page, workspace)
 +    await page
@@ -922,7 +970,14 @@
 +    await terminal.tap()
 +    const keys = page.getByRole("group", { name: "Terminal keys", exact: true })
 +    const ctrl = keys.getByRole("button", { name: "Ctrl", exact: true })
++    const hideKeyboard = keys.getByRole("button", { name: "Hide keyboard", exact: true })
 +    await expect(ctrl).toBeEnabled()
++    const hideKeyboardIcon = hideKeyboard.locator("svg[data-slot=icon-svg]")
++    await expect(hideKeyboardIcon).toHaveCount(1)
++    await expect(hideKeyboardIcon).toHaveAttribute("width", "20")
++    await expect(hideKeyboardIcon).toHaveAttribute("height", "20")
++    await expect(hideKeyboardIcon).toHaveAttribute("viewBox", "0 0 960 960")
++    await expect(hideKeyboardIcon.locator("use")).toHaveAttribute("href", "#opencode-v2-icon-keyboard-hide")
 +    await expect(keys).toHaveCSS("scrollbar-width", "none")
 +    await expect
 +      .poll(() =>
@@ -988,11 +1043,11 @@
 +    await ctrl.tap()
 +    await expect(ctrl).toHaveAttribute("aria-pressed", "true")
 +    await expect(terminal.locator("textarea")).toBeFocused()
-+    await keys.getByRole("button", { name: "Hide keyboard", exact: true }).tap()
++    await hideKeyboard.tap()
 +    await expect(terminal.locator("textarea")).not.toBeFocused()
 +    await expect(ctrl).toHaveAttribute("aria-pressed", "false")
 +    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
-+    await keys.getByRole("button", { name: "Hide keyboard", exact: true }).tap()
++    await hideKeyboard.tap()
 +    await expect(terminal.locator("textarea")).not.toBeFocused()
 +    await expect.poll(() => pty.sockets[0]!.input.join("")).toBe(sent.join(""))
 +    await page.setViewportSize({ width: 1440, height: 900 })
@@ -1749,12 +1804,14 @@
    const diffFiles = createMemo(() => (changes()?.diffs(props.session) ?? []).map((diff) => diff.file))
 --- a/packages/gui-extensions/src/terminal/i18n/en.ts
 +++ b/packages/gui-extensions/src/terminal/i18n/en.ts
-@@ -10,4 +10,14 @@
+@@ -10,4 +10,16 @@
    "connectionLost.abnormalClose": "WebSocket closed abnormally: {{code}}",
    "connectionLost.description": "The terminal connection was interrupted. This can happen when the server restarts.",
    "tab.title": "Terminal",
 +  "keys.title": "Terminal keys",
 +  "keys.hideKeyboard": "Hide keyboard",
++  "keys.selectText": "Select text",
++  "keys.closeSelection": "Close",
 +  "keys.up": "Up arrow",
 +  "keys.down": "Down arrow",
 +  "keys.left": "Left arrow",
@@ -1905,7 +1962,7 @@
  }
  
  const persistTerminal = (input: {
-@@ -186,6 +280,13 @@
+@@ -186,6 +280,18 @@
    const keybinds = extension.keybinds
    const system = extension.system
    const desktop = extension.desktop
@@ -1915,11 +1972,39 @@
 +    // iPadOS can report a desktop Mac UA, but Macs do not expose multiple touch points.
 +    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
 +
-+  const [keys, setKeys] = createStore({ ctrl: false, connected: false })
++  const [keys, setKeys] = createStore<{ ctrl: boolean; connected: boolean; selection: string | undefined }>({
++    ctrl: false,
++    connected: false,
++    selection: undefined,
++  })
++
    const theme = useTheme()
    let container!: HTMLDivElement
  
-@@ -402,6 +503,11 @@
+@@ -224,6 +330,22 @@
+   const scrollY = local.pty.scrollY
+   let ws: WebSocket | undefined
+   let term: Term | undefined
++
++  const openSelection = () => {
++    if (!term) return
++
++    const buffer = term.buffer.active
++    const start = buffer.type === "normal" ? term.getScrollbackLength() - Math.floor(term.getViewportY()) : 0
++
++    const lines = Array.from(
++      { length: term.rows },
++      (_, row) => buffer.getLine(start + row)?.translateToString(true) ?? "",
++    )
++
++    term.textarea?.blur()
++    setKeys("selection", lines.join("\n"))
++  }
++
+   let serializeAddon: SerializeAddon
+   let fitAddon: FitAddon
+   let handleResize: () => void
+@@ -402,6 +524,11 @@
      }
  
      focusTerminal()
@@ -1931,7 +2016,7 @@
    }
  
    const handleLinkClick = (event: MouseEvent) => {
-@@ -497,6 +603,7 @@
+@@ -497,6 +624,7 @@
        useTerminalUiBindings({
          container,
          term: t,
@@ -1939,7 +2024,7 @@
          cleanups,
          handlePointerDown,
          handleLinkClick,
-@@ -534,10 +641,20 @@
+@@ -534,10 +662,20 @@
        cleanups.push(() => disposeIfDisposable(onResize))
  
        const onData = t.onData((data) => {
@@ -1961,7 +2046,7 @@
  
        const onKey = t.onKey((key) => {
          if (key.key == "Enter") {
-@@ -663,10 +780,12 @@
+@@ -663,10 +801,12 @@
          }
  
          ws = socket
@@ -1974,7 +2059,7 @@
            local.onConnect?.()
            scheduleSize(t.cols, t.rows)
  
-@@ -720,7 +839,11 @@
+@@ -720,7 +860,11 @@
            socket.removeEventListener("error", handleError)
            socket.removeEventListener("close", handleClose)
  
@@ -1987,7 +2072,7 @@
  
            if (drop === stop) drop = undefined
  
-@@ -728,7 +851,11 @@
+@@ -728,7 +872,11 @@
          }
  
          const handleClose = (event: CloseEvent) => {
@@ -2000,7 +2085,7 @@
  
            if (drop === stop) drop = undefined
            socket.removeEventListener("open", handleOpen)
-@@ -790,20 +917,89 @@
+@@ -790,20 +938,109 @@
    })
  
    return (
@@ -2019,7 +2104,7 @@
 -      }}
 -      {...others}
 -    />
-+    <div class="size-full min-h-0 flex flex-col">
++    <div class="relative size-full min-h-0 flex flex-col">
 +      <div
 +        ref={container}
 +        data-component="terminal"
@@ -2044,10 +2129,11 @@
 +        >
 +          <For
 +            each={[
-+              { label: "", aria: "keys.hideKeyboard" },
++              { label: "", aria: "keys.hideKeyboard", icon: "keyboard-hide", action: "hideKeyboard", offline: true },
++              { label: "", aria: "keys.selectText", icon: "select-element", action: "selectText" },
 +              { label: "Esc", input: "\x1b" },
 +              { label: "Tab", input: "\t" },
-+              { label: "Ctrl" },
++              { label: "Ctrl", action: "ctrl" },
 +              { label: "↑", arrow: "A", aria: "keys.up" },
 +              { label: "↓", arrow: "B", aria: "keys.down" },
 +              { label: "←", arrow: "D", aria: "keys.left" },
@@ -2064,24 +2150,30 @@
 +            {(key) => (
 +              <Button
 +                size="small"
-+                variant={key.label === "Ctrl" && keys.ctrl ? "neutral" : "ghost"}
++                variant={key.action === "ctrl" && keys.ctrl ? "neutral" : "ghost"}
 +                class="!h-9 shrink-0 min-w-9 px-2 touch-manipulation [&[data-variant=ghost]:not(:active)]:!bg-transparent"
 +                aria-label={key.aria ? extension.t(key.aria) : key.label}
-+                aria-pressed={key.label === "Ctrl" ? keys.ctrl : undefined}
-+                disabled={key.aria !== "keys.hideKeyboard" && !keys.connected}
++                aria-pressed={key.action === "ctrl" ? keys.ctrl : undefined}
++                disabled={!key.offline && !keys.connected}
 +                onPointerDown={(event: PointerEvent) => {
 +                  // Keep the terminal textarea focused so tapping a key does not dismiss the mobile keyboard.
 +                  event.preventDefault()
 +                }}
 +                onClick={() => {
-+                  if (key.aria === "keys.hideKeyboard") {
++                  if (key.action === "selectText") {
++                    openSelection()
++
++                    return
++                  }
++
++                  if (key.action === "hideKeyboard") {
 +                    setKeys("ctrl", false)
 +                    term?.textarea?.blur()
 +
 +                    return
 +                  }
 +
-+                  if (key.label === "Ctrl") {
++                  if (key.action === "ctrl") {
 +                    setKeys("ctrl", !keys.ctrl)
 +                    focusTerminal()
 +
@@ -2091,17 +2183,50 @@
 +                  sendKey(key.arrow ? `\x1b${term?.getMode(1) ? "O" : "["}${key.arrow}` : (key.input ?? ""))
 +                }}
 +              >
-+                <Show when={key.aria === "keys.hideKeyboard"} fallback={key.label.replace(/^Ctrl\+/, "⌃")}>
-+                  <span class="flex items-center" aria-hidden="true">
-+                    <Icon name="keyboard" />
-+                    <Icon name="chevron-down" size="small" />
-+                  </span>
++                <Show when={key.icon} fallback={key.label.replace(/^Ctrl\+/, "⌃")}>
++                  {(icon) => <Icon name={icon()} size={key.action === "hideKeyboard" ? "large" : undefined} />}
 +                </Show>
 +              </Button>
 +            )}
 +          </For>
 +        </div>
 +      </Show>
++      <Show when={keys.selection !== undefined}>
++        <div
++          role="dialog"
++          aria-label={extension.t("keys.selectText")}
++          class="absolute inset-0 z-10 flex min-h-0 flex-col bg-v2-background-bg-base"
++        >
++          <div class="flex shrink-0 justify-end border-b border-border-weaker-base p-2">
++            <Button size="small" variant="ghost" onClick={() => setKeys("selection", undefined)}>
++              {extension.t("keys.closeSelection")}
++            </Button>
++          </div>
++          <pre class="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-3 font-mono select-text touch-pan-y">
++            {keys.selection}
++          </pre>
++        </div>
++      </Show>
 +    </div>
    )
  }
+--- a/packages/ui/src/icons/icon/additional-icons.ts
++++ b/packages/ui/src/icons/icon/additional-icons.ts
+@@ -96,6 +96,8 @@
+   trash: `<path d="M4.58342 17.9134L4.58369 17.4134L4.22787 17.5384L4.22766 18.0384H4.58342V17.9134ZM15.4167 17.9134V18.0384H15.7725L15.7723 17.5384L15.4167 17.9134ZM2.08342 3.95508V3.45508H1.58342V3.95508H2.08342V4.45508V3.95508ZM17.9167 4.45508V4.95508H18.4167V4.45508H17.9167V3.95508V4.45508ZM4.16677 4.58008L3.66701 4.5996L4.22816 17.5379L4.72792 17.4934L5.22767 17.4489L4.66652 4.54055L4.16677 4.58008ZM4.58342 18.0384V17.9134H15.4167V18.0384V18.5384H4.58342V18.0384ZM15.4167 17.9134L15.8332 17.5379L16.2498 4.5996L15.7501 4.58008L15.2503 4.56055L14.8337 17.4989L15.4167 17.9134ZM15.8334 4.58008V4.08008H4.16677V4.58008V5.08008H15.8334V4.58008ZM2.08342 4.45508V4.95508H4.16677V4.58008V4.08008H2.08342V4.45508ZM15.8334 4.58008V5.08008H17.9167V4.45508V3.95508H15.8334V4.58008ZM6.83951 4.35149L7.432 4.55047C7.79251 3.47701 8.80699 2.70508 10.0001 2.70508V2.20508V1.70508C8.25392 1.70508 6.77335 2.83539 6.24702 4.15251L6.83951 4.35149ZM10.0001 2.20508V2.70508C11.1932 2.70508 12.2077 3.47701 12.5682 4.55047L13.1607 4.35149L13.7532 4.15251C13.2269 2.83539 11.7463 1.70508 10.0001 1.70508V2.20508Z" fill="currentColor"/>`,
+   sliders: `<path d="M11.7778 4.66797H14.4444M11.7778 4.66797C11.7778 5.77254 10.8823 6.66797 9.77776 6.66797C8.67319 6.66797 7.77776 5.77254 7.77776 4.66797M11.7778 4.66797C11.7778 3.5634 10.8823 2.66797 9.77776 2.66797C8.67319 2.66797 7.77776 3.5634 7.77776 4.66797M1.55554 4.66797H7.77776M4.22221 11.3346H1.55554M4.22221 11.3346C4.22221 12.4392 5.11764 13.3346 6.22221 13.3346C7.32678 13.3346 8.22221 12.4392 8.22221 11.3346M4.22221 11.3346C4.22221 10.2301 5.11764 9.33464 6.22221 9.33464C7.32678 9.33464 8.22221 10.2301 8.22221 11.3346M14.4444 11.3346H8.22221" stroke="currentColor"/>`,
+   keyboard: `<path d="M5.125 7.375V4.375H14.875V2.875M8.3125 13.9375H11.6875M8.125 13.9375H11.875M2.125 7.375H17.875V17.125H2.125V7.375ZM5.5 10.375H5.125V10.75H5.5V10.375ZM8.5 10.375H8.125V10.75H8.5V10.375ZM11.875 10.375H11.5V10.75H11.875V10.375ZM14.875 10.375H14.5V10.75H14.875V10.375ZM14.875 13.75H14.5V14.125H14.875V13.75ZM5.5 13.75H5.125V14.125H5.5V13.75Z" stroke="currentColor" stroke-linecap="square"/>`,
++  // Material Symbols keyboard_hide, weight 300, outlined (Apache-2.0).
++  "keyboard-hide": `<g transform="translate(0 960)"><path d="M480-63.08 348-195.69h264.61L480-63.08ZM157.69-300q-23.53 0-40.61-17.08T100-357.69v-404.62q0-23.53 17.08-40.61T157.69-820h644.62q23.53 0 40.61 17.08T860-762.31v404.62q0 23.53-17.08 40.61T802.31-300H157.69Zm0-45.39h644.62q4.61 0 8.46-3.84 3.84-3.85 3.84-8.46v-404.62q0-4.61-3.84-8.46-3.85-3.84-8.46-3.84H157.69q-4.61 0-8.46 3.84-3.84 3.85-3.84 8.46v404.62q0 4.61 3.84 8.46 3.85 3.84 8.46 3.84Zm169.77-63.07h305.69v-56.16H327.46v56.16ZM202.39-531.92h56.15v-56.16h-56.15v56.16Zm125.07 0h56.16v-56.16h-56.16v56.16Zm124.46 0h56.16v-56.16h-56.16v56.16Zm125.08 0h56.15v-56.16H577v56.16Zm124.46 0h56.15v-56.16h-56.15v56.16ZM202.39-655.77h56.15v-56.15h-56.15v56.15Zm125.07 0h56.16v-56.15h-56.16v56.15Zm124.46 0h56.16v-56.15h-56.16v56.15Zm125.08 0h56.15v-56.15H577v56.15Zm124.46 0h56.15v-56.15h-56.15v56.15ZM145.39-345.39v-429.22 429.22Z" fill="currentColor"/></g>`,
+   selector: `<path d="M6.66626 12.5033L9.99959 15.8366L13.3329 12.5033M6.66626 7.50326L9.99959 4.16992L13.3329 7.50326" stroke="currentColor" stroke-linecap="square"/>`,
+   "arrow-down-to-line": `<path d="M15.2083 11.6667L10 16.875L4.79167 11.6667M10 16.25V3.125" stroke="currentColor" stroke-width="1.25" stroke-linecap="square"/>`,
+   warning: `<path d="M10 7.91667V11.6667M10 13.7417V13.75M10 2.5L1.875 16.25H18.125L10 2.5Z" stroke="currentColor" stroke-linecap="square"/>`,
+@@ -112,6 +114,8 @@
+ }
+ 
+ export function additionalIconViewBox(name: keyof typeof additionalIcons) {
++  if (name === "keyboard-hide") return "0 0 960 960"
++
+   return name === "magnifying-glass" ||
+     name === "arrow-undo-down" ||
+     name === "subagent" ||
