@@ -705,72 +705,6 @@
  
  test("review and terminal follow the session tab and stay mounted", async ({ page }) => {
    await page.setViewportSize({ width: 1440, height: 900 })
-@@ -321,6 +381,7 @@
- // Pauses each CSS transition as it starts, so a real toggle can be measured mid-motion.
- function holdTransitions(page: Page) {
-   return page.evaluate(() => {
-+    // SAFETY: this helper is the only writer of the optional e2eHold property and always uses this shape.
-     const host = window as Window & { e2eHold?: { active: boolean } }
- 
-     if (!host.e2eHold) {
-@@ -341,7 +402,10 @@
- 
- function releaseTransitions(page: Page) {
-   return page.evaluate(() => {
--    ;(window as Window & { e2eHold?: { active: boolean } }).e2eHold!.active = false
-+    // SAFETY: holdTransitions creates this property before releaseTransitions is called.
-+    const host = window as Window & { e2eHold?: { active: boolean } }
-+
-+    host.e2eHold!.active = false
-     document
-       .getAnimations()
-       .filter((item) => item instanceof CSSTransition && item.playState === "paused")
-@@ -359,7 +423,10 @@
-           (item) =>
-             item instanceof CSSTransition && item.playState === "paused" && item.transitionProperty === "height",
-         )
--        .map((item) => ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot")),
-+        .map((item) => {
-+          // SAFETY: CSS transitions use KeyframeEffect and these height transitions target DOM elements.
-+          return ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot")
-+        }),
-     )
- 
-   if (progress !== undefined) {
-@@ -371,9 +438,10 @@
-       .getAnimations()
-       .filter((item): item is CSSTransition => item instanceof CSSTransition && item.playState === "paused")
- 
--    const region = transitions.find(
--      (item) => ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot") === "session-side-region",
--    )
-+    const region = transitions.find((item) => {
-+      // SAFETY: CSS transitions use KeyframeEffect and these paused transitions target DOM elements.
-+      return ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot") === "session-side-region"
-+    })
- 
-     if (progress !== undefined) {
-       const time = Number(region!.effect!.getTiming().duration) * progress
-@@ -388,7 +456,10 @@
-     const content = box('[data-slot="terminal-panel-content"]')!
- 
-     return {
--      moving: transitions.map((item) => ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot")),
-+      moving: transitions.map((item) => {
-+        // SAFETY: CSS transitions use KeyframeEffect and these paused transitions target DOM elements.
-+        return ((item.effect as KeyframeEffect).target as Element).getAttribute("data-slot")
-+      }),
-       terminalRegion: terminalRegion.height,
-       terminalBottom: terminal.bottom,
-       anchor: Math.abs(terminal.top - content.top),
-@@ -414,6 +485,7 @@
-       const centers = await Promise.all(
-         [terminal.getByRole("button", { name: "New terminal", exact: true }), toggle].map((button) =>
-           button.locator("svg").evaluate((element) => {
-+            // SAFETY: the locator selects the button's root SVG element, which exposes getBBox and getScreenCTM.
-             const svg = element as SVGSVGElement
-             const path = svg.getBBox()
- 
 --- a/packages/app/e2e/regression/tabs.spec.ts
 +++ b/packages/app/e2e/regression/tabs.spec.ts
 @@ -295,6 +295,102 @@
@@ -1488,7 +1422,7 @@
            <MobilePanelDrawer
 --- a/packages/app/src/session/screen.tsx
 +++ b/packages/app/src/session/screen.tsx
-@@ -198,6 +198,43 @@
+@@ -201,6 +201,43 @@
    })
  
    const conversationVisible = createMemo(() => isDesktop() || mobileView() === "session")

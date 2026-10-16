@@ -41,7 +41,7 @@
 - Fixed endpoints are `https://github.com/ynhuu/Android-OpenCode/releases/latest/download/manifest.json` and `https://github.com/ynhuu/Android-OpenCode/releases/latest/download/dist.zip`.
 - The manifest `zipUrl` must exactly match the fixed ZIP endpoint. Downloads allow at most five redirects and must stay on HTTPS.
 - Frontend version codes are independent of APK version codes; increase the frontend code when publishing new frontend content.
-- Base the next frontend release on the latest published frontend version and increment the version and code by one. Do not increment either for unpublished builds or repeated website test deployments; reuse the same candidate version until it is actually released.
+- Base frontend release versions on the official OpenCode source baseline. The first customized release on a new upstream baseline uses `<upstream-version>-custom.1`; subsequent frontend releases on that same baseline increment the custom suffix. Derive `versionCode` as `major * 10000 + minor * 1000 + patch * 10 + customSuffix` (for example, `2.0.31-custom.1` is `20311`). Do not increment for unpublished builds or repeated website test deployments; reuse the same candidate until it is actually released.
 - Every release designated as latest must include both frontend assets, even for an APK-only update. Upload and verify all assets in a draft before publishing a non-prerelease release.
 - Publishing or replacing remote assets requires user authorization; never overwrite an existing release implicitly.
 
