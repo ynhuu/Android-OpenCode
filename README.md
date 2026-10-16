@@ -43,7 +43,7 @@ iPhone 和 iPad 无需安装 APK，可使用网站前端：
 | --- | --- | --- | --- |
 | Android APK | 0.1.0 | 1 | 已发布；本次不变 |
 | Android 前端 | 2.0.29-custom.4 | 20294 | GitHub Release |
-| 网站前端（试验版） | 2.0.29-custom.4-test | 20294 | 网站试用，不是 GitHub Release |
+| 网站前端（试验版） | 2.0.30-custom.5-test | 20295 | 网站试用，不是 GitHub Release |
 
 Android APK 与前端分开更新。本次发布只更新前端，已安装 APK 的用户无需重装；应用启动后按提示安装前端更新。前端补丁基于官方 OpenCode 2.0.29，定制差异见[迁移指南](docs/frontend/前端修改与迁移指南.md)和[完整补丁](docs/frontend/前端修改与迁移指南.patch)。
 
